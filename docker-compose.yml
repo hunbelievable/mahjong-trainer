@@ -16,7 +16,7 @@ services:
 
   migrate:
     build: .
-    command: npx prisma db push
+    command: node node_modules/.bin/prisma db push
     depends_on:
       postgres:
         condition: service_healthy
