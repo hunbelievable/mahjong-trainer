@@ -1,0 +1,56 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Game {
+  id         String       @id @default(cuid())
+  mode       String       // 'live' | 'simulation' | 'observe' | 'study'
+  createdAt  DateTime     @default(now())
+  finishedAt DateTime?
+  winner     String?      // PlayerId or null
+  moves      MoveRecord[]
+}
+
+model MoveRecord {
+  id           String      @id @default(cuid())
+  gameId       String
+  game         Game        @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  turn         Int
+  player       String      // PlayerId
+  action       String      // MoveAction
+  tileId       String
+  handBefore   String      // JSON array of tile IDs
+  winProbBefore Float
+  winProbAfter  Float
+  commentary   String?
+  tileEvents   TileEvent[]
+
+  @@index([gameId, turn])
+}
+
+model TileEvent {
+  id        String     @id @default(cuid())
+  moveId    String
+  move      MoveRecord @relation(fields: [moveId], references: [id], onDelete: Cascade)
+  tileId    String
+  fromState String
+  toState   String
+  actor     String     // PlayerId
+}
+
+model HandPattern {
+  id          String  @id @default(cuid())
+  name        String
+  difficulty  String  // 'starter' | 'medium' | 'hard'
+  description String
+  groups      String  // JSON: PatternGroup[]
+  builtIn     Boolean @default(false)
+  active      Boolean @default(true)
+
+  @@index([active])
+}
