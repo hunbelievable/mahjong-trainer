@@ -623,7 +623,7 @@ function resolveCpuClaims(
   const shuffledCpus = [...cpuSeats].sort(() => Math.random() - 0.5);
   for (const seat of shuffledCpus) {
     const strategy = ctx.strategies[seat] ?? DIFFICULTY_PRESETS.intermediate;
-    for (const claimType of ["quint", "kong", "pung"] as ClaimType[]) {
+    for (const claimType of ["quint", "kong", "pung"] as ("pung" | "kong" | "quint")[]) {
       if (strategy.shouldClaim(discard, state.hands[seat], claimType, state.wall, ctx.patterns)) {
         return processClaim(state, ctx, seat, discard, discardedBy, claimType);
       }
@@ -640,7 +640,7 @@ function processClaim(
   claimant: PlayerId,
   discard: Tile,
   discardedBy: PlayerId,
-  claimType: ClaimType
+  claimType: "pung" | "kong" | "quint"
 ): GameState {
   const needed = claimType === "pung" ? 2 : claimType === "kong" ? 3 : 4;
   const hand = state.hands[claimant];
