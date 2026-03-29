@@ -235,6 +235,15 @@ export default function PatternsPage() {
   const [search, setSearch] = useState("");
   const [activeSection, setActiveSection] = useState<string | null>(null);
   const [activeDiff, setActiveDiff] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+
+  const toggleSection = (section: string) => {
+    setCollapsed(prev => {
+      const next = new Set(prev);
+      next.has(section) ? next.delete(section) : next.add(section);
+      return next;
+    });
+  };
 
   const grouped = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -333,23 +342,30 @@ export default function PatternsPage() {
           if (!patterns || patterns.length === 0) return null;
           const accentColor = SECTION_COLORS[section] ?? "bg-gray-500";
           const headerBg = SECTION_BG[section] ?? "bg-gray-50 border-gray-200";
+          const isCollapsed = collapsed.has(section);
           return (
             <div key={section}>
-              {/* Section header */}
-              <div className={`flex items-center gap-3 px-4 py-2 rounded-lg border mb-3 ${headerBg}`}>
-                <div className={`w-2 h-6 rounded-full ${accentColor}`} />
+              {/* Section header — click to collapse */}
+              <button
+                onClick={() => toggleSection(section)}
+                className={`w-full flex items-center gap-3 px-4 py-2 rounded-lg border mb-3 ${headerBg} hover:brightness-95 transition-all`}
+              >
+                <div className={`w-2 h-6 rounded-full shrink-0 ${accentColor}`} />
                 <h2 className="text-sm font-bold text-gray-800">
                   {SECTION_LABELS[section] ?? section}
                 </h2>
                 <span className="text-xs text-gray-500">{patterns.length} pattern{patterns.length !== 1 ? "s" : ""}</span>
-              </div>
+                <span className="ml-auto text-gray-400 text-xs">{isCollapsed ? "▶" : "▼"}</span>
+              </button>
 
               {/* Pattern grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {patterns.map(p => (
-                  <PatternCard key={p.id} pattern={p} accentColor={accentColor} />
-                ))}
-              </div>
+              {!isCollapsed && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {patterns.map(p => (
+                    <PatternCard key={p.id} pattern={p} accentColor={accentColor} />
+                  ))}
+                </div>
+              )}
             </div>
           );
         })}
