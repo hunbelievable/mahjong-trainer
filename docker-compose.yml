@@ -5,9 +5,7 @@ services:
     environment:
       POSTGRES_DB: mahjong_trainer
       POSTGRES_USER: mahjong
-      POSTGRES_PASSWORD: mahjong_dev
-    ports:
-      - "5432:5432"
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-mahjong_dev}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -16,18 +14,26 @@ services:
       timeout: 5s
       retries: 5
 
-  app:
+  migrate:
     build: .
-    restart: unless-stopped
+    command: npx prisma db push
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://mahjong:mahjong_dev@postgres:5432/mahjong_trainer
+      DATABASE_URL: postgresql://mahjong:${DB_PASSWORD:-mahjong_dev}@postgres:5432/mahjong_trainer
+    restart: on-failure
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql://mahjong:${DB_PASSWORD:-mahjong_dev}@postgres:5432/mahjong_trainer
     ports:
       - "3000:3000"
-    profiles:
-      - lab
 
 volumes:
   postgres_data:
