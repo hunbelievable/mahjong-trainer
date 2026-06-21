@@ -57,11 +57,18 @@ function randomItem<T>(arr: T[]): T {
 }
 
 /**
- * Count how many copies of (suit, val) already appear in a hand —
- * used to determine if a pung/kong claim is possible.
+ * Tiles the claimant must surrender from hand to complete a pung/kong/quint.
+ * Naturals first, jokers fill any remaining slots. NMJL requires at least one
+ * natural matching tile — returns null if the claim is not legal.
  */
-function countInHand(hand: Tile[], discard: Tile): number {
-  return hand.filter(t => t.suit === discard.suit && t.val === discard.val).length;
+function tilesToSurrender(hand: Tile[], discard: Tile, needed: number): Tile[] | null {
+  const naturals = hand.filter(t => t.suit === discard.suit && t.val === discard.val).slice(0, needed);
+  if (naturals.length < 1) return null;
+  const remaining = needed - naturals.length;
+  if (remaining === 0) return naturals;
+  const jokers = hand.filter(t => t.suit === "joker").slice(0, remaining);
+  if (naturals.length + jokers.length < needed) return null;
+  return [...naturals, ...jokers];
 }
 
 // =============================================================================
@@ -112,17 +119,13 @@ export const greedyStrategy: CpuStrategy = {
       return result.shanten === -1;
     }
 
-    // Claim pung/kong/quint if we have the copies and it improves position
-    const copies = countInHand(hand, discard);
+    // Claim pung/kong/quint if we can legally form it and it improves position
     const needed = claimType === "pung" ? 2 : claimType === "kong" ? 3 : 4;
-    if (copies < needed) return false;
+    const surrender = tilesToSurrender(hand, discard, needed);
+    if (!surrender) return false;
 
-    // Check if claiming improves shanten
     const before = evaluateHand(hand, wall, patterns).shanten;
-    const claimedTiles = hand.filter(
-      t => t.suit === discard.suit && t.val === discard.val
-    ).slice(0, needed);
-    const handAfterClaim = hand.filter(t => !claimedTiles.includes(t));
+    const handAfterClaim = hand.filter(t => !surrender.includes(t));
     const after = evaluateHand(handAfterClaim, wall, patterns).shanten;
     return after <= before;
   },
@@ -180,9 +183,9 @@ export function createProbabilisticStrategy(
         return result.shanten === -1;
       }
 
-      const copies = countInHand(hand, discard);
       const needed = claimType === "pung" ? 2 : claimType === "kong" ? 3 : 4;
-      if (copies < needed) return false;
+      const surrender = tilesToSurrender(hand, discard, needed);
+      if (!surrender) return false;
 
       // With epsilon chance, make a random claim decision
       if (Math.random() < config.epsilon) {
@@ -190,10 +193,7 @@ export function createProbabilisticStrategy(
       }
 
       // Otherwise claim only if the resulting hand meets the win probability threshold
-      const claimedTiles = hand
-        .filter(t => t.suit === discard.suit && t.val === discard.val)
-        .slice(0, needed);
-      const handAfterClaim = hand.filter(t => !claimedTiles.includes(t));
+      const handAfterClaim = hand.filter(t => !surrender.includes(t));
       const result = evaluateHand(handAfterClaim, wall, patterns);
       return result.winProbability >= config.claimThreshold;
     },

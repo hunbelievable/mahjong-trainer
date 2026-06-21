@@ -187,16 +187,15 @@ function eligibleClaims(
   }
 
   const matching = hand.filter(t => t.suit === discard.suit && t.val === discard.val).length;
-
-  // Quint (4 naturals + joker already in hand, or 4 matching)
   const jokers = hand.filter(t => t.suit === "joker").length;
-  if (matching + jokers >= 4 || matching >= 4) types.push("quint");
 
-  // Kong (3 matching)
-  if (matching >= 3) types.push("kong");
-
-  // Pung (2 matching)
-  if (matching >= 2) types.push("pung");
+  // NMJL rule: to claim a discard for pung/kong/quint, you must have at least one
+  // *natural* matching tile in hand. Jokers may fill the remaining slots in the meld.
+  if (matching >= 1) {
+    if (matching + jokers >= 4) types.push("quint");
+    if (matching + jokers >= 3) types.push("kong");
+    if (matching + jokers >= 2) types.push("pung");
+  }
 
   return types;
 }
@@ -644,17 +643,22 @@ function processClaim(
 ): GameState {
   const needed = claimType === "pung" ? 2 : claimType === "kong" ? 3 : 4;
   const hand = state.hands[claimant];
-  const matchingInHand = hand
-    .filter(t => t.suit === discard.suit && t.val === discard.val)
-    .slice(0, needed);
+
+  // Consume naturals first, then top up with jokers if needed.
+  const naturals = hand.filter(t => t.suit === discard.suit && t.val === discard.val).slice(0, needed);
+  const jokerFillCount = needed - naturals.length;
+  const jokerFill = jokerFillCount > 0
+    ? hand.filter(t => t.suit === "joker").slice(0, jokerFillCount)
+    : [];
+  const consumed = [...naturals, ...jokerFill];
 
   const claimedDiscard = setTileState(discard, `claimed_${claimType}` as TileState, claimant);
   const meldTiles = [
     claimedDiscard,
-    ...matchingInHand.map(t => setTileState(t, `claimed_${claimType}` as TileState, claimant)),
+    ...consumed.map(t => setTileState(t, `claimed_${claimType}` as TileState, claimant)),
   ];
   const meld: Meld = { type: claimType, tiles: meldTiles, claimedFrom: discardedBy };
-  const handAfterClaim = hand.filter(t => !matchingInHand.includes(t));
+  const handAfterClaim = hand.filter(t => !consumed.includes(t));
 
   let newState: GameState = {
     ...state,

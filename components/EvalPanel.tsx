@@ -1,11 +1,27 @@
 "use client";
 
 import type { EvalResult } from "@/engine/evaluator";
+import type { HandPattern } from "@/engine/patterns";
 import TileFace from "./TileFace";
 
 interface EvalPanelProps {
   result: EvalResult | null;
   handSize: number;
+}
+
+/** Compact tile-face render of every group in a fully-instantiated pattern. */
+function PatternTiles({ pattern }: { pattern: HandPattern }) {
+  return (
+    <div className="flex flex-wrap gap-1.5 items-center">
+      {pattern.groups.map((g, i) => (
+        <span key={i} className="inline-flex gap-0.5 items-center">
+          {Array.from({ length: g.count }).map((_, j) => (
+            <TileFace key={j} suit={g.suit} val={g.val} size="xs" />
+          ))}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 function ShantenBadge({ shanten }: { shanten: number }) {
@@ -66,25 +82,30 @@ export default function EvalPanel({ result, handSize }: EvalPanelProps) {
     <div className="rounded-lg border border-gray-200 bg-white divide-y divide-gray-100">
 
       {/* Shanten + Pattern */}
-      <div className="p-3 flex items-center justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2">
-            <ShantenBadge shanten={result.shanten} />
-            {result.shanten >= 0 && (
-              <span className="text-xs text-gray-500">
-                Best: <span className="font-semibold text-gray-700">
-                  {bestPattern?.pattern.name ?? "—"}
+      <div className="p-3 space-y-2">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <ShantenBadge shanten={result.shanten} />
+              {result.shanten >= 0 && (
+                <span className="text-xs text-gray-500">
+                  Best: <span className="font-semibold text-gray-700">
+                    {bestPattern?.pattern.name ?? "—"}
+                  </span>
                 </span>
-              </span>
+              )}
+            </div>
+            {result.bestPatterns.length > 1 && (
+              <div className="text-xs text-gray-400 mt-0.5">
+                +{result.bestPatterns.length - 1} other pattern{result.bestPatterns.length > 2 ? "s" : ""}
+              </div>
             )}
           </div>
-          {result.bestPatterns.length > 1 && (
-            <div className="text-xs text-gray-400 mt-0.5">
-              +{result.bestPatterns.length - 1} other pattern{result.bestPatterns.length > 2 ? "s" : ""}
-            </div>
-          )}
+          <div className="text-xs text-gray-400 shrink-0">{handSize} tiles</div>
         </div>
-        <div className="text-xs text-gray-400">{handSize} tiles</div>
+        {bestPattern && result.shanten >= 0 && result.bestPatterns.length === 1 && (
+          <PatternTiles pattern={bestPattern.pattern} />
+        )}
       </div>
 
       {/* Win probability */}
@@ -122,14 +143,17 @@ export default function EvalPanel({ result, handSize }: EvalPanelProps) {
       {/* All patterns at best shanten (collapsed if only 1) */}
       {result.bestPatterns.length > 1 && (
         <div className="p-3">
-          <div className="text-xs font-semibold text-gray-500 mb-1.5 uppercase tracking-wide">
+          <div className="text-xs font-semibold text-gray-500 mb-2 uppercase tracking-wide">
             Viable patterns
           </div>
-          <div className="space-y-0.5">
-            {result.bestPatterns.map(m => (
-              <div key={m.pattern.id} className="flex items-center justify-between text-xs">
-                <span className="text-gray-700">{m.pattern.name}</span>
-                <span className="text-gray-400">{m.tilesMatched}/14 matched</span>
+          <div className="space-y-2.5">
+            {result.bestPatterns.map((m, idx) => (
+              <div key={`${m.pattern.id}-${idx}`} className="space-y-1">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-gray-700">{m.pattern.name}</span>
+                  <span className="text-gray-400">{m.tilesMatched}/14 matched</span>
+                </div>
+                <PatternTiles pattern={m.pattern} />
               </div>
             ))}
           </div>
