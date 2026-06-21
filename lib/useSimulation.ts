@@ -114,6 +114,23 @@ export function useSimulation(options: SimulationOptions = {}) {
     dispatch({ type: "BEGIN_SECOND_CHARLESTON" });
   }, [dispatch]);
 
+  const respondCourtesy = useCallback((count: number) => {
+    dispatch({ type: "HUMAN_COURTESY_RESPOND", count });
+  }, [dispatch]);
+
+  const passCourtesy = useCallback((tileIds: string[]) => {
+    dispatch({ type: "HUMAN_COURTESY_PASS", tileIds });
+  }, [dispatch]);
+
+  const swapJoker = useCallback((args: {
+    meldOwnerSeat: PlayerId;
+    meldIndex: number;
+    jokerTileId: string;
+    handTileId: string;
+  }) => {
+    dispatch({ type: "HUMAN_JOKER_SWAP", ...args });
+  }, [dispatch]);
+
   return {
     state,
     startGame,
@@ -124,6 +141,9 @@ export function useSimulation(options: SimulationOptions = {}) {
     stageCharleston,
     stopCharleston,
     beginSecondCharleston,
+    respondCourtesy,
+    passCourtesy,
+    swapJoker,
     humanSeat,
   };
 }

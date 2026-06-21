@@ -237,20 +237,21 @@ export function chooseTilesForCharleston(
   strategy: CpuStrategy,
   hand: Tile[],
   wall: Tile[],
-  patterns: HandPatternTemplate[] = PATTERNS
+  patterns: HandPatternTemplate[] = PATTERNS,
+  count: number = 3
 ): Tile[] {
   const passable = hand.filter(t => t.suit !== "joker");
-  if (passable.length < 3) return passable.slice(0, Math.min(3, passable.length));
+  if (passable.length < count) return passable.slice(0, Math.min(count, passable.length));
 
   if (strategy.difficulty === "random") {
-    return [...passable].sort(() => Math.random() - 0.5).slice(0, 3);
+    return [...passable].sort(() => Math.random() - 0.5).slice(0, count);
   }
 
   // Greedy sequential: find worst tile, remove it, repeat
   const toPass: Tile[] = [];
   let remaining = [...hand];
 
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < count; i++) {
     const candidates = remaining.filter(t => t.suit !== "joker");
     if (candidates.length === 0) break;
 
@@ -304,4 +305,29 @@ export function shouldStopCharleston(
   };
 
   return result.winProbability >= (threshold[strategy.difficulty] ?? 0.25);
+}
+
+/**
+ * Propose a courtesy-pass count (0–3) after the Second Charleston. Heuristic:
+ * worse the hand, more tiles you're willing to swap.
+ *  shanten <= 1 → 0 (don't risk a hand that's almost there)
+ *  shanten 2–3 → 1
+ *  shanten 4–5 → 2
+ *  shanten 6+  → 3
+ * Random strategy proposes a uniformly random count.
+ */
+export function chooseCourtesyCount(
+  strategy: CpuStrategy,
+  hand: Tile[],
+  wall: Tile[],
+  patterns: HandPatternTemplate[] = PATTERNS
+): number {
+  if (strategy.difficulty === "random") {
+    return Math.floor(Math.random() * 4);
+  }
+  const result = evaluateHand(hand, wall, patterns);
+  if (result.shanten <= 1) return 0;
+  if (result.shanten <= 3) return 1;
+  if (result.shanten <= 5) return 2;
+  return 3;
 }

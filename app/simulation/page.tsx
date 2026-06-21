@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect, useRef } from "react";
 import type { GameState } from "@/engine/gameEngine";
-import { CHARLESTON_STEPS } from "@/engine/gameEngine";
+import { CHARLESTON_STEPS, findJokerSwaps } from "@/engine/gameEngine";
 import { useSimulation } from "@/lib/useSimulation";
 import { evaluateHand, bestDiscard } from "@/engine/evaluator";
 import { sortTiles } from "@/lib/shorthand";
@@ -40,9 +40,16 @@ export default function SimulationPage() {
   const [sorted, setSorted] = useState(true);
   const [coachingEnabled, setCoachingEnabled] = useState(true);
   const [charlestonSelection, setCharlestonSelection] = useState<Set<string>>(new Set());
+  /** Tile IDs from the most-recent received pass that the human is passing blind. */
+  const [blindSelection, setBlindSelection] = useState<Set<string>>(new Set());
+  /** True once the human has chosen to look at received tiles — disables blind passing for this step. */
+  const [hasLookedAtReceived, setHasLookedAtReceived] = useState(false);
+  /** Tile IDs the human has selected for the courtesy pass. */
+  const [courtesySelection, setCourtesySelection] = useState<Set<string>>(new Set());
 
   const { state, startGame, discard, claim, pass, reset,
-          stageCharleston, stopCharleston, beginSecondCharleston, humanSeat } = useSimulation({
+          stageCharleston, stopCharleston, beginSecondCharleston,
+          respondCourtesy, passCourtesy, swapJoker, humanSeat } = useSimulation({
     humanSeat: "E",
     cpuDifficulty,
     cpuDelayMs: 500,
@@ -130,15 +137,45 @@ export default function SimulationPage() {
   const charlestonStep = state.charleston?.step ?? -1;
   useEffect(() => {
     setCharlestonSelection(new Set());
+    setBlindSelection(new Set());
+    setHasLookedAtReceived(false);
   }, [charlestonStep]);
+
+  // Clear courtesy selection when its phase changes
+  useEffect(() => {
+    if (state.pendingAction?.type !== "human_courtesy_select") {
+      setCourtesySelection(new Set());
+    }
+  }, [state.pendingAction]);
+
+  /** Blind pass is offered on Charleston steps 2 (First-Left) and 5 (Second-Right). */
+  const blindAllowed = charlestonStep === 2 || charlestonStep === 5;
+  const receivedIds = useMemo(
+    () => (blindAllowed ? state.charleston?.lastReceived?.[humanSeat] ?? [] : []),
+    [blindAllowed, state.charleston, humanSeat]
+  );
 
   const toggleCharlestonTile = (tileId: string, isJoker: boolean) => {
     if (isJoker) return;
     setCharlestonSelection(prev => {
       const next = new Set(prev);
+      const totalSelected = next.size + blindSelection.size;
       if (next.has(tileId)) {
         next.delete(tileId);
-      } else if (next.size < 3) {
+      } else if (totalSelected < 3) {
+        next.add(tileId);
+      }
+      return next;
+    });
+  };
+
+  const toggleBlindTile = (tileId: string) => {
+    setBlindSelection(prev => {
+      const next = new Set(prev);
+      const totalSelected = next.size + charlestonSelection.size;
+      if (next.has(tileId)) {
+        next.delete(tileId);
+      } else if (totalSelected < 3) {
         next.add(tileId);
       }
       return next;
@@ -146,9 +183,31 @@ export default function SimulationPage() {
   };
 
   const confirmCharlestonPass = () => {
-    if (charlestonSelection.size !== 3) return;
-    stageCharleston(Array.from(charlestonSelection));
+    const total = charlestonSelection.size + blindSelection.size;
+    if (total !== 3) return;
+    stageCharleston([...Array.from(charlestonSelection), ...Array.from(blindSelection)]);
     setCharlestonSelection(new Set());
+    setBlindSelection(new Set());
+    setHasLookedAtReceived(false);
+  };
+
+  const toggleCourtesyTile = (tileId: string, isJoker: boolean, max: number) => {
+    if (isJoker) return;
+    setCourtesySelection(prev => {
+      const next = new Set(prev);
+      if (next.has(tileId)) {
+        next.delete(tileId);
+      } else if (next.size < max) {
+        next.add(tileId);
+      }
+      return next;
+    });
+  };
+
+  const confirmCourtesyPass = (count: number) => {
+    if (courtesySelection.size !== count) return;
+    passCourtesy(Array.from(courtesySelection));
+    setCourtesySelection(new Set());
   };
 
   const claimWindow = state.pendingAction?.type === "claim_window"
@@ -158,6 +217,12 @@ export default function SimulationPage() {
   const isHumanTurn = state.pendingAction?.type === "human_discard";
   const isCharlestonPass = state.pendingAction?.type === "human_charleston_pass";
   const isCharlestonStop = state.pendingAction?.type === "human_charleston_stop";
+  const courtesyProposeAction = state.pendingAction?.type === "human_courtesy_propose"
+    ? state.pendingAction
+    : null;
+  const courtesySelectAction = state.pendingAction?.type === "human_courtesy_select"
+    ? state.pendingAction
+    : null;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -281,38 +346,124 @@ export default function SimulationPage() {
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
               {/* Left: tile passing card */}
               <div className="lg:col-span-2 bg-white rounded-lg border border-gray-200 p-5 space-y-4">
-                {/* Header */}
-                <div>
-                  <div className="text-xs font-semibold text-violet-600 uppercase tracking-wide mb-0.5">
-                    Charleston {charlNum} of 2
-                  </div>
-                  <h2 className="text-base font-bold text-gray-800">
-                    {dirLabel} — passing to <span className="text-violet-700">{passingTo}</span>
-                  </h2>
-                  <p className="text-xs text-gray-500 mt-0.5">
-                    Select exactly 3 tiles to pass. You cannot pass jokers.
-                  </p>
-                </div>
-
-                {/* Stop / Continue prompt */}
-                {isCharlestonStop && (
-                  <div className="bg-amber-50 border border-amber-300 rounded-lg p-4 space-y-3">
-                    <div className="text-sm font-semibold text-amber-800">
-                      First Charleston complete. Begin Second Charleston?
+                {/* Header — only when actually picking tiles to pass */}
+                {isCharlestonPass && (
+                  <div>
+                    <div className="text-xs font-semibold text-violet-600 uppercase tracking-wide mb-0.5">
+                      Charleston {charlNum} of 2
                     </div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={beginSecondCharleston}
-                        className="px-4 py-1.5 bg-violet-600 hover:bg-violet-700 text-white text-sm font-semibold rounded transition-colors"
-                      >
-                        Yes — Second Charleston
-                      </button>
-                      <button
-                        onClick={stopCharleston}
-                        className="px-4 py-1.5 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-semibold rounded transition-colors"
-                      >
-                        No — Start playing
-                      </button>
+                    <h2 className="text-base font-bold text-gray-800">
+                      {dirLabel} — passing to <span className="text-violet-700">{passingTo}</span>
+                    </h2>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      Select exactly 3 tiles to pass. You cannot pass jokers.
+                      {blindAllowed && " You may include just-received tiles blind."}
+                    </p>
+                  </div>
+                )}
+
+                {/* Stop / Continue vote */}
+                {isCharlestonStop && state.pendingAction?.type === "human_charleston_stop" && (() => {
+                  const cpuVotes = state.pendingAction.cpuVotes;
+                  const cpuSeats: PlayerId[] = (["S", "W", "N"] as PlayerId[]).filter(s => s !== humanSeat);
+                  const anyCpuPlays = cpuSeats.some(s => !cpuVotes[s]);
+                  return (
+                    <div className="bg-amber-50 border border-amber-300 rounded-lg p-4 space-y-3">
+                      <div className="text-sm font-semibold text-amber-800">
+                        First Charleston complete. Play the Second Charleston?
+                      </div>
+                      <div className="text-xs text-amber-900 space-y-0.5">
+                        <div className="font-medium">Opponent votes:</div>
+                        {cpuSeats.map(seat => (
+                          <div key={seat} className="ml-2">
+                            • {SEAT_LABELS[seat]}: {cpuVotes[seat]
+                              ? <span className="text-gray-600">wants to skip</span>
+                              : <span className="text-violet-700 font-semibold">wants to play</span>}
+                          </div>
+                        ))}
+                      </div>
+                      <div className="text-xs text-amber-700 italic">
+                        {anyCpuPlays
+                          ? "At least one opponent wants to play — Second Charleston will happen regardless of your vote, but record it for completeness."
+                          : "All opponents want to skip. Your vote decides: unanimous skip stops here, otherwise Second Charleston is played."}
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={beginSecondCharleston}
+                          className="px-4 py-1.5 bg-violet-600 hover:bg-violet-700 text-white text-sm font-semibold rounded transition-colors"
+                        >
+                          Play Second Charleston
+                        </button>
+                        <button
+                          onClick={stopCharleston}
+                          className="px-4 py-1.5 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-semibold rounded transition-colors"
+                        >
+                          Vote to skip
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Blind-pass section (only steps 2 and 5) */}
+                {isCharlestonPass && blindAllowed && receivedIds.length > 0 && (
+                  <div className="rounded-lg border border-indigo-200 bg-indigo-50/60 p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div>
+                        <div className="text-xs font-semibold text-indigo-700 uppercase tracking-wide">
+                          Just received
+                        </div>
+                        <p className="text-xs text-indigo-600 mt-0.5">
+                          {hasLookedAtReceived
+                            ? "Revealed — include them with the rest of your hand below."
+                            : "You can pass any of these forward without looking. Click a tile to include it blind."}
+                        </p>
+                      </div>
+                      {!hasLookedAtReceived && (
+                        <button
+                          onClick={() => { setHasLookedAtReceived(true); setBlindSelection(new Set()); }}
+                          className="text-xs px-2 py-1 rounded bg-white border border-indigo-300 text-indigo-700 hover:bg-indigo-100 transition-colors"
+                        >
+                          Look at received
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {receivedIds.map(tileId => {
+                        const isBlind = blindSelection.has(tileId);
+                        if (hasLookedAtReceived) {
+                          // Once revealed, find the actual tile in hand and show face-up; user picks from main grid.
+                          const tile = humanHand.find(t => t.id === tileId);
+                          if (!tile) return null;
+                          return (
+                            <TileFace
+                              key={tileId}
+                              suit={tile.suit}
+                              val={tile.val}
+                              size="sm"
+                              title="Already revealed — select from your hand below"
+                            />
+                          );
+                        }
+                        return (
+                          <button
+                            key={tileId}
+                            type="button"
+                            onClick={() => toggleBlindTile(tileId)}
+                            className={`
+                              w-9 h-12 inline-flex items-center justify-center
+                              rounded-md border-2 transition-all
+                              shadow-[0_1px_0_#bdb39a,0_2px_3px_rgba(0,0,0,0.18)]
+                              ${isBlind
+                                ? "bg-indigo-600 border-indigo-700 text-white scale-105"
+                                : "bg-indigo-100 border-indigo-300 text-indigo-500 hover:bg-indigo-200"}
+                            `}
+                            title={isBlind ? "Will be passed blind — click to unselect" : "Click to pass blind"}
+                          >
+                            <span className="text-xl font-bold leading-none">?</span>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
@@ -321,11 +472,18 @@ export default function SimulationPage() {
                 {isCharlestonPass && (
                   <>
                     <div className="flex flex-wrap gap-2">
-                      {humanHand.map(tile => {
+                      {humanHand
+                        .filter(tile => {
+                          // Hide received tiles from the face-up grid until the user reveals them.
+                          if (blindAllowed && !hasLookedAtReceived && receivedIds.includes(tile.id)) return false;
+                          return true;
+                        })
+                        .map(tile => {
                         const isJoker = tile.suit === "joker";
                         const isSelected = charlestonSelection.has(tile.id);
                         const isSuggested = charlestonSuggestedIds.has(tile.id);
-                        const isDisabled = isJoker || (!isSelected && charlestonSelection.size >= 3);
+                        const totalSelected = charlestonSelection.size + blindSelection.size;
+                        const isDisabled = isJoker || (!isSelected && totalSelected >= 3);
                         return (
                           <div
                             key={tile.id}
@@ -370,19 +528,110 @@ export default function SimulationPage() {
 
                     <div className="flex items-center gap-4">
                       <span className={`text-sm font-semibold ${
-                        charlestonSelection.size === 3 ? "text-violet-700" : "text-gray-500"
+                        charlestonSelection.size + blindSelection.size === 3 ? "text-violet-700" : "text-gray-500"
                       }`}>
-                        {charlestonSelection.size}/3 selected
+                        {charlestonSelection.size + blindSelection.size}/3 selected
+                        {blindSelection.size > 0 && (
+                          <span className="ml-1 text-xs text-indigo-600">
+                            ({blindSelection.size} blind)
+                          </span>
+                        )}
                       </span>
                       <button
                         onClick={confirmCharlestonPass}
-                        disabled={charlestonSelection.size !== 3}
+                        disabled={charlestonSelection.size + blindSelection.size !== 3}
                         className="px-5 py-1.5 bg-violet-600 hover:bg-violet-700 disabled:bg-gray-200 disabled:text-gray-400 text-white font-semibold text-sm rounded transition-colors"
                       >
                         Pass tiles →
                       </button>
                     </div>
                   </>
+                )}
+
+                {/* Courtesy pass — proposal step */}
+                {courtesyProposeAction && (
+                  <div className="bg-rose-50 border border-rose-200 rounded-lg p-4 space-y-3">
+                    <div>
+                      <div className="text-xs font-semibold text-rose-700 uppercase tracking-wide mb-0.5">
+                        Courtesy pass
+                      </div>
+                      <h2 className="text-base font-bold text-gray-800">
+                        {SEAT_LABELS[courtesyProposeAction.acrossSeat]} proposes
+                        {" "}
+                        <span className="text-rose-700">
+                          {courtesyProposeAction.cpuProposal === 0
+                            ? "no exchange"
+                            : `${courtesyProposeAction.cpuProposal} tile${courtesyProposeAction.cpuProposal === 1 ? "" : "s"}`}
+                        </span>
+                      </h2>
+                      <p className="text-xs text-gray-600 mt-1">
+                        Pick your count — the lower of the two is what you actually exchange. Pick 0 to decline.
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      {[0, 1, 2, 3].map(n => (
+                        <button
+                          key={n}
+                          onClick={() => respondCourtesy(n)}
+                          className="w-12 h-12 rounded border border-rose-300 bg-white hover:bg-rose-100 text-rose-700 font-bold text-lg transition-colors"
+                        >
+                          {n}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Courtesy pass — tile selection step */}
+                {courtesySelectAction && (
+                  <div className="bg-rose-50 border border-rose-200 rounded-lg p-4 space-y-3">
+                    <div>
+                      <div className="text-xs font-semibold text-rose-700 uppercase tracking-wide mb-0.5">
+                        Courtesy pass
+                      </div>
+                      <h2 className="text-base font-bold text-gray-800">
+                        Pick {courtesySelectAction.count} tile{courtesySelectAction.count === 1 ? "" : "s"} to exchange with {SEAT_LABELS[courtesySelectAction.acrossSeat]}
+                      </h2>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {humanHand.map(tile => {
+                        const isJoker = tile.suit === "joker";
+                        const isSelected = courtesySelection.has(tile.id);
+                        const isDisabled = isJoker || (!isSelected && courtesySelection.size >= courtesySelectAction.count);
+                        return (
+                          <div
+                            key={tile.id}
+                            className={`relative rounded-md p-0.5 transition-all ${
+                              isSelected ? "bg-rose-600 ring-2 ring-rose-600 scale-105 shadow-md" : ""
+                            }`}
+                          >
+                            <TileFace
+                              suit={tile.suit}
+                              val={tile.val}
+                              size="sm"
+                              dimmed={isDisabled && !isSelected}
+                              onClick={isDisabled ? undefined : () => toggleCourtesyTile(tile.id, isJoker, courtesySelectAction.count)}
+                              title={isJoker ? "Jokers cannot be passed" : undefined}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <span className={`text-sm font-semibold ${
+                        courtesySelection.size === courtesySelectAction.count ? "text-rose-700" : "text-gray-500"
+                      }`}>
+                        {courtesySelection.size}/{courtesySelectAction.count} selected
+                      </span>
+                      <button
+                        onClick={() => confirmCourtesyPass(courtesySelectAction.count)}
+                        disabled={courtesySelection.size !== courtesySelectAction.count}
+                        className="px-5 py-1.5 bg-rose-600 hover:bg-rose-700 disabled:bg-gray-200 disabled:text-gray-400 text-white font-semibold text-sm rounded transition-colors"
+                      >
+                        Exchange →
+                      </button>
+                    </div>
+                  </div>
                 )}
 
                 <div className="pt-2 border-t border-gray-100">
@@ -469,6 +718,54 @@ export default function SimulationPage() {
                     )}
                   </div>
                 </div>
+
+                {/* Joker swap opportunities — only on your turn */}
+                {isHumanTurn && (() => {
+                  const swaps = findJokerSwaps(state, humanSeat);
+                  // Dedupe by (meldOwnerSeat, meldIndex, jokerTileId) — only the first natural is offered per joker.
+                  const seen = new Set<string>();
+                  const unique = swaps.filter(s => {
+                    const key = `${s.meldOwnerSeat}:${s.meldIndex}:${s.jokerTile.id}`;
+                    if (seen.has(key)) return false;
+                    seen.add(key);
+                    return true;
+                  });
+                  if (unique.length === 0) return null;
+                  return (
+                    <div className="rounded-lg border border-purple-200 bg-purple-50/60 p-3 space-y-2">
+                      <div className="text-xs font-semibold text-purple-700 uppercase tracking-wide">
+                        Joker swap available
+                      </div>
+                      <p className="text-xs text-purple-700">
+                        You can swap a natural tile from your hand for a joker exposed in someone's meld.
+                      </p>
+                      <div className="space-y-1.5">
+                        {unique.map((s, i) => (
+                          <div key={i} className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs text-gray-600 w-14 shrink-0">
+                              {s.meldOwnerSeat === humanSeat ? "Your" : `${SEAT_LABELS[s.meldOwnerSeat]}'s`}
+                            </span>
+                            <span className="text-xs text-gray-500">give</span>
+                            <TileFace suit={s.handTile.suit} val={s.handTile.val} size="xs" />
+                            <span className="text-xs text-gray-500">for</span>
+                            <TileFace suit="joker" val="joker" size="xs" />
+                            <button
+                              onClick={() => swapJoker({
+                                meldOwnerSeat: s.meldOwnerSeat,
+                                meldIndex: s.meldIndex,
+                                jokerTileId: s.jokerTile.id,
+                                handTileId: s.handTile.id,
+                              })}
+                              className="ml-auto px-2 py-0.5 text-xs font-semibold rounded bg-purple-600 hover:bg-purple-700 text-white transition-colors"
+                            >
+                              Swap
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 <HandDisplay
                   tiles={humanHand}

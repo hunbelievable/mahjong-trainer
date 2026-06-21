@@ -10,7 +10,7 @@ import type { EvalResult } from "./evaluator";
 import { PATTERNS } from "./patterns";
 import type { HandPattern, HandPatternTemplate } from "./patterns";
 import type { CpuStrategy, ClaimType, SeatStrategies } from "./cpu";
-import { DIFFICULTY_PRESETS, chooseTilesForCharleston, shouldStopCharleston } from "./cpu";
+import { DIFFICULTY_PRESETS, chooseTilesForCharleston, shouldStopCharleston, chooseCourtesyCount } from "./cpu";
 
 // =============================================================================
 // Meld
@@ -45,7 +45,23 @@ export type PendingAction =
       eligibleTypes: ClaimType[]; // types the human CAN claim (mahjong first)
     }
   | { type: "human_charleston_pass"; step: number }
-  | { type: "human_charleston_stop" };
+  | {
+      type: "human_charleston_stop";
+      /** CPU votes so the UI can show how each opponent voted. true = wants to stop. */
+      cpuVotes: Record<PlayerId, boolean>;
+    }
+  | {
+      /** After Second Charleston: the across-CPU has proposed a courtesy count; human responds. */
+      type: "human_courtesy_propose";
+      acrossSeat: PlayerId;
+      cpuProposal: number;
+    }
+  | {
+      /** Both sides agreed on `count` (> 0); human selects which tiles to pass. */
+      type: "human_courtesy_select";
+      acrossSeat: PlayerId;
+      count: number;
+    };
 
 export type GamePhase = "setup" | "charleston" | "playing" | "finished";
 
@@ -58,6 +74,24 @@ export interface CharlestonState {
   step: number;
   /** Tile IDs each player has staged to pass this step (CPUs stage immediately, human via action). */
   staged: Partial<Record<PlayerId, string[]>>;
+  /**
+   * Tile IDs each player received in the most-recent pass. Used by the UI to allow
+   * blind passes on steps 2 and 5 — the player may include received tiles without
+   * looking at them when picking what to pass next.
+   */
+  lastReceived: Partial<Record<PlayerId, string[]>>;
+}
+
+/**
+ * Courtesy pass state — only present after Second Charleston completes.
+ * Two independent across-table negotiations happen in parallel (E↔W and S↔N).
+ * For each pair we record the proposed count and the chosen tile IDs.
+ */
+export interface CourtesyState {
+  /** Proposed count from each player (0–3). Null until they propose. */
+  proposals: Partial<Record<PlayerId, number>>;
+  /** Tiles each player has chosen to pass once both counts agree. */
+  selections: Partial<Record<PlayerId, string[]>>;
 }
 
 export const CHARLESTON_STEPS: Array<{
@@ -105,6 +139,7 @@ export interface GameState {
   pendingAction: PendingAction;
   log: string[];              // human-readable event log for the UI
   charleston: CharlestonState | null;
+  courtesy: CourtesyState | null;
 }
 
 // =============================================================================
@@ -119,6 +154,16 @@ export type GameAction =
   | { type: "HUMAN_STAGE_CHARLESTON"; tileIds: string[] }
   | { type: "STOP_CHARLESTON" }
   | { type: "BEGIN_SECOND_CHARLESTON" }
+  | { type: "HUMAN_COURTESY_RESPOND"; count: number }
+  | { type: "HUMAN_COURTESY_PASS"; tileIds: string[] }
+  | {
+      /** Human swaps a natural tile from hand for a joker exposed in someone's meld. */
+      type: "HUMAN_JOKER_SWAP";
+      meldOwnerSeat: PlayerId;
+      meldIndex: number;
+      jokerTileId: string;
+      handTileId: string;
+    }
   | { type: "ADVANCE_CPU" }  // caller triggers each CPU step (enables animation pacing)
   | { type: "RUN_TO_COMPLETION" }  // runs entire game synchronously in one reducer call
   | { type: "SET_STATE"; state: GameState }  // replace state directly (used by ludicrous step-loop)
@@ -130,6 +175,11 @@ export type GameAction =
 
 const NEXT_SEAT: Record<PlayerId, PlayerId> = {
   E: "S", S: "W", W: "N", N: "E",
+};
+
+/** Across-table partner for courtesy pass. */
+const ACROSS: Record<PlayerId, PlayerId> = {
+  E: "W", W: "E", S: "N", N: "S",
 };
 
 function nextSeat(seat: PlayerId): PlayerId {
@@ -219,6 +269,7 @@ export function createGameState(): GameState {
     pendingAction: null,
     log: [],
     charleston: null,
+    courtesy: null,
   };
 }
 
@@ -253,7 +304,7 @@ export function gameReducer(
         phase: "charleston",
         wall: remaining,
         hands: dealtHands as Record<PlayerId, Tile[]>,
-        charleston: { step: 0, staged: {} },
+        charleston: { step: 0, staged: {}, lastReceived: {} },
         log: ["Game started. Charleston begins — First Charleston."],
         pendingAction: null,
       };
@@ -282,7 +333,7 @@ export function gameReducer(
 
       const step = state.charleston.step;
       const stagedWithHuman: CharlestonState = {
-        step,
+        ...state.charleston,
         staged: { ...state.charleston.staged, [ctx.humanSeat]: tileIds },
       };
 
@@ -290,41 +341,36 @@ export function gameReducer(
       let newState = executeCharleston({ ...state, charleston: stagedWithHuman }, step);
       const nextStep = step + 1;
 
-      // After First Charleston (steps 0–2): check for Second Charleston
+      // After First Charleston (steps 0–2): vote on whether to play the Second.
+      // NMJL rule: Second Charleston is *skipped* only if ALL four players agree to
+      // skip. If any player wants to play it, it happens.
       if (nextStep === 3) {
         const cpuSeats = SEAT_ORDER.filter(s => s !== ctx.humanSeat);
-        const stoppingSeat = cpuSeats.find(seat => {
+        const cpuVotes: Record<PlayerId, boolean> = { E: false, S: false, W: false, N: false };
+        for (const seat of cpuSeats) {
           const strategy = ctx.strategies[seat] ?? DIFFICULTY_PRESETS.intermediate;
-          return shouldStopCharleston(strategy, newState.hands[seat], newState.wall, ctx.patterns);
-        });
-
-        if (stoppingSeat) {
-          return finishCharleston(
-            addLog(newState.log, `${stoppingSeat} stops the Second Charleston.`),
-            newState,
-            ctx
-          );
+          cpuVotes[seat] = shouldStopCharleston(strategy, newState.hands[seat], newState.wall, ctx.patterns);
         }
 
-        // Ask human to continue or stop
         return {
           ...newState,
-          charleston: { step: nextStep, staged: {} },
-          pendingAction: { type: "human_charleston_stop" },
+          charleston: { ...newState.charleston!, step: nextStep, staged: {} },
+          pendingAction: { type: "human_charleston_stop", cpuVotes },
         };
       }
 
-      // After all 6 steps — done
+      // After all 6 steps — Second Charleston was played, so begin courtesy phase
       if (nextStep > 5) {
-        return finishCharleston(
+        return startCourtesyOrFinish(
           addLog(newState.log, "Charleston complete."),
           newState,
-          ctx
+          ctx,
+          /* hadSecond */ true
         );
       }
 
       // Advance to next step: CPUs stage, then wait for human
-      newState = { ...newState, charleston: { step: nextStep, staged: {} } };
+      newState = { ...newState, charleston: { ...newState.charleston!, step: nextStep, staged: {} } };
       newState = cpuStageCharleston(newState, ctx, nextStep);
       return {
         ...newState,
@@ -333,13 +379,34 @@ export function gameReducer(
     }
 
     // ── STOP_CHARLESTON ───────────────────────────────────────────────────
+    // Human votes to stop. Only honored if all CPUs also voted to stop.
     case "STOP_CHARLESTON": {
       if (state.pendingAction?.type !== "human_charleston_stop") return state;
-      return finishCharleston(
-        addLog(state.log, "Second Charleston skipped."),
-        state,
-        ctx
-      );
+      const { cpuVotes } = state.pendingAction;
+      const allStop = SEAT_ORDER
+        .filter(s => s !== ctx.humanSeat)
+        .every(s => cpuVotes[s]);
+
+      if (allStop) {
+        return startCourtesyOrFinish(
+          addLog(state.log, "All players agree — Second Charleston skipped."),
+          state,
+          ctx,
+          /* hadSecond */ false
+        );
+      }
+      // At least one CPU wants to play — begin Second Charleston anyway.
+      const dissenters = SEAT_ORDER.filter(s => s !== ctx.humanSeat && !cpuVotes[s]).join(", ");
+      let newState: GameState = {
+        ...state,
+        charleston: { ...state.charleston!, step: 3, staged: {} },
+        log: addLog(state.log, `${dissenters} want${dissenters.length === 1 ? "s" : ""} to play Second Charleston.`),
+      };
+      newState = cpuStageCharleston(newState, ctx, 3);
+      return {
+        ...newState,
+        pendingAction: { type: "human_charleston_pass", step: 3 },
+      };
     }
 
     // ── BEGIN_SECOND_CHARLESTON ───────────────────────────────────────────
@@ -347,7 +414,7 @@ export function gameReducer(
       if (state.pendingAction?.type !== "human_charleston_stop") return state;
       let newState: GameState = {
         ...state,
-        charleston: { step: 3, staged: {} },
+        charleston: { ...state.charleston!, step: 3, staged: {} },
         log: addLog(state.log, "Second Charleston begins."),
       };
       newState = cpuStageCharleston(newState, ctx, 3);
@@ -357,6 +424,64 @@ export function gameReducer(
       };
     }
 
+    // ── HUMAN_COURTESY_RESPOND ─────────────────────────────────────────────
+    // Human responds to the across-CPU's proposal with their own count (0-3).
+    // The pair-effective count is min(human, cpu). If 0 → no exchange for this pair.
+    // The other-diagonal CPU pair resolves automatically.
+    case "HUMAN_COURTESY_RESPOND": {
+      if (state.pendingAction?.type !== "human_courtesy_propose") return state;
+      const { acrossSeat, cpuProposal } = state.pendingAction;
+      const humanProposal = Math.max(0, Math.min(3, Math.floor(action.count)));
+      const effective = Math.min(humanProposal, cpuProposal);
+
+      const courtesy: CourtesyState = {
+        proposals: {
+          ...(state.courtesy?.proposals ?? {}),
+          [ctx.humanSeat]: humanProposal,
+          [acrossSeat]: cpuProposal,
+        },
+        selections: { ...(state.courtesy?.selections ?? {}) },
+      };
+
+      if (effective === 0) {
+        const log = addLog(state.log, `No courtesy pass with ${acrossSeat} (lower of ${humanProposal} and ${cpuProposal}).`);
+        return resolveOtherDiagonalAndFinish({ ...state, courtesy }, ctx, log);
+      }
+
+      // CPU picks its courtesy tiles immediately
+      const cpuStrategy = ctx.strategies[acrossSeat] ?? DIFFICULTY_PRESETS.intermediate;
+      const cpuTiles = chooseTilesForCharleston(cpuStrategy, state.hands[acrossSeat], state.wall, ctx.patterns, effective);
+      courtesy.selections[acrossSeat] = cpuTiles.map(t => t.id);
+
+      return {
+        ...state,
+        courtesy,
+        pendingAction: { type: "human_courtesy_select", acrossSeat, count: effective },
+      };
+    }
+
+    // ── HUMAN_COURTESY_PASS ────────────────────────────────────────────────
+    case "HUMAN_COURTESY_PASS": {
+      if (state.pendingAction?.type !== "human_courtesy_select") return state;
+      const { acrossSeat, count } = state.pendingAction;
+      const { tileIds } = action;
+      if (tileIds.length !== count) return state;
+
+      const humanHand = state.hands[ctx.humanSeat];
+      const humanTiles = tileIds.map(id => humanHand.find(t => t.id === id)).filter(Boolean) as Tile[];
+      if (humanTiles.length !== count) return state;
+      if (humanTiles.some(t => t.suit === "joker")) return state;
+
+      const courtesy: CourtesyState = {
+        proposals: state.courtesy?.proposals ?? {},
+        selections: { ...(state.courtesy?.selections ?? {}), [ctx.humanSeat]: tileIds },
+      };
+
+      const exchanged = executeCourtesyPair(state, ctx.humanSeat, acrossSeat, courtesy);
+      const log = addLog(state.log, `Courtesy: exchanged ${count} tile${count === 1 ? "" : "s"} with ${acrossSeat}.`);
+      return resolveOtherDiagonalAndFinish({ ...exchanged, courtesy }, ctx, log);
+    }
+
     // ── HUMAN_DISCARD ─────────────────────────────────────────────────────────
     case "HUMAN_DISCARD": {
       if (state.pendingAction?.type !== "human_discard") return state;
@@ -364,6 +489,23 @@ export function gameReducer(
       if (!tile) return state;
 
       return processDiscard(state, ctx, ctx.humanSeat, tile);
+    }
+
+    // ── HUMAN_JOKER_SWAP ───────────────────────────────────────────────────
+    // Swap a natural tile from the human's hand for a joker in any exposed meld.
+    // Legal only while the human is between draw/claim and discard (pendingAction === human_discard).
+    case "HUMAN_JOKER_SWAP": {
+      if (state.pendingAction?.type !== "human_discard") return state;
+      const swap = validateJokerSwap(
+        state,
+        ctx.humanSeat,
+        action.meldOwnerSeat,
+        action.meldIndex,
+        action.jokerTileId,
+        action.handTileId
+      );
+      if (!swap) return state;
+      return applyJokerSwap(state, swap);
     }
 
     // ── HUMAN_CLAIM ───────────────────────────────────────────────────────────
@@ -480,6 +622,7 @@ function executeCharleston(state: GameState, step: number): GameState {
   const receivesFrom = RECEIVES_FROM[direction];
 
   const newHands: Record<PlayerId, Tile[]> = {} as Record<PlayerId, Tile[]>;
+  const lastReceived: Partial<Record<PlayerId, string[]>> = {};
 
   for (const seat of SEAT_ORDER) {
     const passingIds = new Set(staged[seat] ?? []);
@@ -491,15 +634,107 @@ function executeCharleston(state: GameState, step: number): GameState {
       ...state.hands[seat].filter(t => !passingIds.has(t.id)),
       ...receivingTiles,
     ];
+    lastReceived[seat] = receivingTiles.map(t => t.id);
   }
 
   const { label, charleston: charlNum } = CHARLESTON_STEPS[step];
   return {
     ...state,
     hands: newHands,
-    charleston: { ...state.charleston!, staged: {} },
+    charleston: { ...state.charleston!, staged: {}, lastReceived },
     log: addLog(state.log, `Charleston ${charlNum}: ${label} complete.`),
   };
+}
+
+/**
+ * Charleston is over (either after step 5 or after a unanimous skip after step 2).
+ * If the Second Charleston was played, kick off the courtesy phase; otherwise
+ * skip straight to playing.
+ */
+function startCourtesyOrFinish(
+  log: string[],
+  state: GameState,
+  ctx: EngineContext,
+  hadSecond: boolean
+): GameState {
+  if (!hadSecond) {
+    return finishCharleston(log, state, ctx);
+  }
+
+  const acrossSeat = ACROSS[ctx.humanSeat];
+  const cpuStrategy = ctx.strategies[acrossSeat] ?? DIFFICULTY_PRESETS.intermediate;
+  const cpuProposal = chooseCourtesyCount(cpuStrategy, state.hands[acrossSeat], state.wall, ctx.patterns);
+
+  return {
+    ...state,
+    log,
+    courtesy: { proposals: { [acrossSeat]: cpuProposal }, selections: {} },
+    pendingAction: { type: "human_courtesy_propose", acrossSeat, cpuProposal },
+  };
+}
+
+/**
+ * After the human's diagonal is resolved, settle the other-diagonal CPU pair
+ * (both seats are CPUs), then finish.
+ */
+function resolveOtherDiagonalAndFinish(
+  state: GameState,
+  ctx: EngineContext,
+  log: string[]
+): GameState {
+  const humanDiagonal = new Set<PlayerId>([ctx.humanSeat, ACROSS[ctx.humanSeat]]);
+  const otherPair = SEAT_ORDER.filter(s => !humanDiagonal.has(s));
+  if (otherPair.length !== 2) {
+    return finishCharleston(log, state, ctx);
+  }
+  const [a, b] = otherPair;
+  const sa = ctx.strategies[a] ?? DIFFICULTY_PRESETS.intermediate;
+  const sb = ctx.strategies[b] ?? DIFFICULTY_PRESETS.intermediate;
+  const propA = chooseCourtesyCount(sa, state.hands[a], state.wall, ctx.patterns);
+  const propB = chooseCourtesyCount(sb, state.hands[b], state.wall, ctx.patterns);
+  const count = Math.min(propA, propB);
+
+  let nextState = state;
+  let nextLog = log;
+  if (count > 0) {
+    const tilesA = chooseTilesForCharleston(sa, state.hands[a], state.wall, ctx.patterns, count);
+    const tilesB = chooseTilesForCharleston(sb, state.hands[b], state.wall, ctx.patterns, count);
+    const courtesy: CourtesyState = {
+      proposals: { ...(state.courtesy?.proposals ?? {}), [a]: propA, [b]: propB },
+      selections: {
+        ...(state.courtesy?.selections ?? {}),
+        [a]: tilesA.map(t => t.id),
+        [b]: tilesB.map(t => t.id),
+      },
+    };
+    nextState = executeCourtesyPair(state, a, b, courtesy);
+    nextState = { ...nextState, courtesy };
+    nextLog = addLog(log, `${a} and ${b} exchange ${count} courtesy tile${count === 1 ? "" : "s"}.`);
+  } else {
+    nextLog = addLog(log, `No courtesy pass between ${a} and ${b}.`);
+  }
+
+  return finishCharleston(nextLog, nextState, ctx);
+}
+
+/** Swap the selected tiles between two seats. Both seats must have a `selections` entry. */
+function executeCourtesyPair(
+  state: GameState,
+  seatA: PlayerId,
+  seatB: PlayerId,
+  courtesy: CourtesyState
+): GameState {
+  const aIds = new Set(courtesy.selections[seatA] ?? []);
+  const bIds = new Set(courtesy.selections[seatB] ?? []);
+  const aTiles = state.hands[seatA].filter(t => aIds.has(t.id));
+  const bTiles = state.hands[seatB].filter(t => bIds.has(t.id));
+
+  const newHands = {
+    ...state.hands,
+    [seatA]: [...state.hands[seatA].filter(t => !aIds.has(t.id)), ...bTiles],
+    [seatB]: [...state.hands[seatB].filter(t => !bIds.has(t.id)), ...aTiles],
+  };
+  return { ...state, hands: newHands };
 }
 
 /** Transition from Charleston to playing: East draws, set phase. */
@@ -674,11 +909,13 @@ function processClaim(
     return { ...newState, pendingAction: { type: "human_discard" } };
   }
 
-  // CPU claimant discards immediately
+  // CPU claimant: take any free joker swaps first, then discard.
+  const afterSwaps = applyAutoJokerSwaps(newState, claimant);
   const strategy = ctx.strategies[claimant] ?? DIFFICULTY_PRESETS.intermediate;
-  const evalResult = evaluateHand([...handAfterClaim, discard], newState.wall, ctx.patterns);
-  const discardChoice = strategy.chooseDiscard([...handAfterClaim, discard], evalResult, newState.wall, ctx.patterns);
-  return processDiscard(newState, ctx, claimant, discardChoice);
+  const handForDiscard = afterSwaps.hands[claimant];
+  const evalResult = evaluateHand(handForDiscard, afterSwaps.wall, ctx.patterns);
+  const discardChoice = strategy.chooseDiscard(handForDiscard, evalResult, afterSwaps.wall, ctx.patterns);
+  return processDiscard(afterSwaps, ctx, claimant, discardChoice);
 }
 
 /**
@@ -715,24 +952,152 @@ function advanceToNextDraw(
   return newState;
 }
 
+// =============================================================================
+// Joker swap helpers
+// =============================================================================
+
+/**
+ * A legal joker-swap opportunity available to `swapperSeat`:
+ * remove `handTile` from their hand, replace `jokerTile` in the meld with `handTile`,
+ * and give the joker to the swapper.
+ */
+export interface JokerSwap {
+  swapperSeat: PlayerId;
+  meldOwnerSeat: PlayerId;
+  meldIndex: number;
+  jokerTile: Tile;
+  handTile: Tile;
+}
+
+/** The natural suit+val a meld represents (any non-joker tile in the meld). */
+function meldTarget(meld: Meld): { suit: Tile["suit"]; val: Tile["val"] } | null {
+  const natural = meld.tiles.find(t => t.suit !== "joker");
+  return natural ? { suit: natural.suit, val: natural.val } : null;
+}
+
+/**
+ * Enumerate every legal joker swap available to `swapperSeat`. Each pair of
+ * (joker in a meld, matching natural in hand) yields one entry. The UI uses
+ * this to render the "Swap joker" panel; the CPU uses it to auto-swap.
+ */
+export function findJokerSwaps(state: GameState, swapperSeat: PlayerId): JokerSwap[] {
+  const hand = state.hands[swapperSeat] ?? [];
+  if (hand.length === 0) return [];
+
+  const swaps: JokerSwap[] = [];
+  for (const seat of SEAT_ORDER) {
+    const melds = state.melds[seat] ?? [];
+    melds.forEach((meld, meldIndex) => {
+      const target = meldTarget(meld);
+      if (!target) return;
+      const naturalsInHand = hand.filter(t => t.suit === target.suit && t.val === target.val);
+      if (naturalsInHand.length === 0) return;
+      for (const jokerTile of meld.tiles) {
+        if (jokerTile.suit !== "joker") continue;
+        // Pair this joker with one natural — for the UI we surface every distinct
+        // (joker, natural) pairing so the player can pick which natural to give up.
+        for (const handTile of naturalsInHand) {
+          swaps.push({
+            swapperSeat,
+            meldOwnerSeat: seat,
+            meldIndex,
+            jokerTile,
+            handTile,
+          });
+        }
+      }
+    });
+  }
+  return swaps;
+}
+
+function validateJokerSwap(
+  state: GameState,
+  swapperSeat: PlayerId,
+  meldOwnerSeat: PlayerId,
+  meldIndex: number,
+  jokerTileId: string,
+  handTileId: string
+): JokerSwap | null {
+  const meld = state.melds[meldOwnerSeat]?.[meldIndex];
+  if (!meld) return null;
+  const jokerTile = meld.tiles.find(t => t.id === jokerTileId);
+  if (!jokerTile || jokerTile.suit !== "joker") return null;
+  const target = meldTarget(meld);
+  if (!target) return null;
+  const handTile = state.hands[swapperSeat]?.find(t => t.id === handTileId);
+  if (!handTile) return null;
+  if (handTile.suit !== target.suit || handTile.val !== target.val) return null;
+  return { swapperSeat, meldOwnerSeat, meldIndex, jokerTile, handTile };
+}
+
+function applyJokerSwap(state: GameState, swap: JokerSwap): GameState {
+  const { swapperSeat, meldOwnerSeat, meldIndex, jokerTile, handTile } = swap;
+  const meld = state.melds[meldOwnerSeat][meldIndex];
+
+  // Replace the joker in the meld with the natural tile (marked as a swapped-in tile).
+  const newMeldTiles = meld.tiles.map(t =>
+    t.id === jokerTile.id
+      ? setTileState({ ...handTile }, "joker_swapped" as TileState, meldOwnerSeat)
+      : t
+  );
+  const newMeld: Meld = { ...meld, tiles: newMeldTiles };
+  const newOwnerMelds = state.melds[meldOwnerSeat].map((m, i) => (i === meldIndex ? newMeld : m));
+
+  // Remove the natural from the swapper's hand, add the joker to it.
+  const swappedJoker = setTileState({ ...jokerTile }, "in_hand" as TileState, swapperSeat);
+  const newSwapperHand = [
+    ...state.hands[swapperSeat].filter(t => t.id !== handTile.id),
+    swappedJoker,
+  ];
+
+  return {
+    ...state,
+    hands: { ...state.hands, [swapperSeat]: newSwapperHand },
+    melds: { ...state.melds, [meldOwnerSeat]: newOwnerMelds },
+    log: addLog(
+      state.log,
+      `${swapperSeat} swaps for joker in ${meldOwnerSeat}'s ${meld.type}.`
+    ),
+  };
+}
+
+/**
+ * Greedy auto-swap for CPUs: as long as there's a legal joker swap, take it.
+ * A free joker is essentially always an upgrade, so we don't ask the strategy.
+ */
+function applyAutoJokerSwaps(state: GameState, seat: PlayerId): GameState {
+  let s = state;
+  // Safety bound: at most one swap per distinct joker in play.
+  for (let i = 0; i < 16; i++) {
+    const swaps = findJokerSwaps(s, seat);
+    if (swaps.length === 0) break;
+    s = applyJokerSwap(s, swaps[0]);
+  }
+  return s;
+}
+
 function runCpuTurn(state: GameState, ctx: EngineContext, seat: PlayerId): GameState {
   const strategy = ctx.strategies[seat] ?? DIFFICULTY_PRESETS.intermediate;
-  const hand = state.hands[seat];
+
+  // Take any free joker swaps before drawing-vs-discard logic.
+  const stateAfterSwaps = applyAutoJokerSwaps(state, seat);
+  const hand = stateAfterSwaps.hands[seat];
 
   // Check for self-draw mahjong (14 tiles after draw in advanceToNextDraw)
-  if (hand.length === 14 && isWinningHand(hand, state.wall, ctx.patterns)) {
+  if (hand.length === 14 && isWinningHand(hand, stateAfterSwaps.wall, ctx.patterns)) {
     return {
-      ...state,
+      ...stateAfterSwaps,
       winner: seat,
       winningPattern:
-        evaluateHand(hand, state.wall, ctx.patterns).bestPatterns[0]?.pattern ?? null,
+        evaluateHand(hand, stateAfterSwaps.wall, ctx.patterns).bestPatterns[0]?.pattern ?? null,
       phase: "finished",
       pendingAction: null,
-      log: addLog(state.log, `${seat} self-draws MAHJONG!`),
+      log: addLog(stateAfterSwaps.log, `${seat} self-draws MAHJONG!`),
     };
   }
 
-  const evalResult = evaluateHand(hand, state.wall, ctx.patterns);
-  const discardChoice = strategy.chooseDiscard(hand, evalResult, state.wall, ctx.patterns);
-  return processDiscard(state, ctx, seat, discardChoice);
+  const evalResult = evaluateHand(hand, stateAfterSwaps.wall, ctx.patterns);
+  const discardChoice = strategy.chooseDiscard(hand, evalResult, stateAfterSwaps.wall, ctx.patterns);
+  return processDiscard(stateAfterSwaps, ctx, seat, discardChoice);
 }

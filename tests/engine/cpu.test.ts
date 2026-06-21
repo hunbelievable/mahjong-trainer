@@ -214,6 +214,13 @@ describe("gameEngine — full game simulation", () => {
           state = gameReducer(state, { type: "HUMAN_STAGE_CHARLESTON", tileIds: tiles.map(t => t.id) }, ctx);
         } else if (state.pendingAction?.type === "human_charleston_stop") {
           state = gameReducer(state, { type: "BEGIN_SECOND_CHARLESTON" }, ctx);
+        } else if (state.pendingAction?.type === "human_courtesy_propose") {
+          // Decline courtesy in this integration test
+          state = gameReducer(state, { type: "HUMAN_COURTESY_RESPOND", count: 0 }, ctx);
+        } else if (state.pendingAction?.type === "human_courtesy_select") {
+          const { count } = state.pendingAction;
+          const tiles = state.hands["E"].filter(t => t.suit !== "joker").slice(0, count);
+          state = gameReducer(state, { type: "HUMAN_COURTESY_PASS", tileIds: tiles.map(t => t.id) }, ctx);
         } else {
           break;
         }
