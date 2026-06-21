@@ -229,6 +229,9 @@ function eligibleClaims(
   wall: Tile[],
   patterns: HandPatternTemplate[]
 ): ClaimType[] {
+  // NMJL: a discarded joker is a dead tile — cannot be called or used to complete a hand.
+  if (discard.suit === "joker") return [];
+
   const types: ClaimType[] = [];
 
   // Mahjong: adding this tile completes the hand

@@ -66,7 +66,9 @@ function countGroupMatch(
   const deficit = group.count - natural;
 
   let jokerFill = 0;
-  if (deficit > 0 && !group.jokerLocked) {
+  // NMJL: jokers may only fill groups of 3+ identical tiles (pung, kong, quint).
+  // Singles and pairs must always be naturals.
+  if (deficit > 0 && !group.jokerLocked && group.count >= 3) {
     jokerFill = Math.min(deficit, availableJokers);
   }
 
@@ -113,9 +115,9 @@ export function shantenForPattern(
     freq.set(key, naturalInHand - natural);
     totalMatched += natural;
 
-    // Fill remaining slots with jokers (if group allows it)
+    // Fill remaining slots with jokers (NMJL: only groups of 3+ accept jokers)
     const deficit = group.count - natural;
-    if (deficit > 0 && !group.jokerLocked) {
+    if (deficit > 0 && !group.jokerLocked && group.count >= 3) {
       const fill = Math.min(deficit, jokerCount - jokersUsed);
       totalMatched += fill;
       jokersUsed += fill;

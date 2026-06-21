@@ -100,6 +100,13 @@ export function useObserve(options: ObserveOptions = {}) {
       if (s.pendingAction?.type === "human_charleston_stop") {
         return { type: "BEGIN_SECOND_CHARLESTON" };
       }
+      // No real observer to negotiate courtesy — always decline (count 0).
+      if (s.pendingAction?.type === "human_courtesy_propose") {
+        return { type: "HUMAN_COURTESY_RESPOND", count: 0 };
+      }
+      if (s.pendingAction?.type === "human_courtesy_select") {
+        return { type: "HUMAN_COURTESY_PASS", tileIds: [] };
+      }
       return null;
     }
 
@@ -151,6 +158,10 @@ export function useObserve(options: ObserveOptions = {}) {
             action = { type: "HUMAN_STAGE_CHARLESTON", tileIds: tiles.map(t => t.id) };
           } else if (s.pendingAction?.type === "human_charleston_stop") {
             action = { type: "BEGIN_SECOND_CHARLESTON" };
+          } else if (s.pendingAction?.type === "human_courtesy_propose") {
+            action = { type: "HUMAN_COURTESY_RESPOND", count: 0 };
+          } else if (s.pendingAction?.type === "human_courtesy_select") {
+            action = { type: "HUMAN_COURTESY_PASS", tileIds: [] };
           } else {
             break;
           }
@@ -209,6 +220,10 @@ export function useObserve(options: ObserveOptions = {}) {
           s = gameReducer(s, { type: "HUMAN_STAGE_CHARLESTON", tileIds: tiles.map(t => t.id) }, ctx);
         } else if (s.pendingAction?.type === "human_charleston_stop") {
           s = gameReducer(s, { type: "BEGIN_SECOND_CHARLESTON" }, ctx);
+        } else if (s.pendingAction?.type === "human_courtesy_propose") {
+          s = gameReducer(s, { type: "HUMAN_COURTESY_RESPOND", count: 0 }, ctx);
+        } else if (s.pendingAction?.type === "human_courtesy_select") {
+          s = gameReducer(s, { type: "HUMAN_COURTESY_PASS", tileIds: [] }, ctx);
         } else {
           break;
         }
