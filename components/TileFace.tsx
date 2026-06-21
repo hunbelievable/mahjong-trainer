@@ -13,6 +13,21 @@ const SIZE_CLASSES: Record<TileFaceSize, string> = {
   lg: "w-14 h-20",
 };
 
+/** Per-size font sizing for the corner index badge on cracks/winds. */
+const BADGE_CLASSES: Record<TileFaceSize, string> = {
+  xs: "text-[7px] top-0 left-0.5",
+  sm: "text-[9px] top-0 left-0.5",
+  md: "text-[10px] top-0 left-1",
+  lg: "text-[12px] top-0.5 left-1",
+};
+
+/** The little corner index — like the pip in the corner of a playing card. Cracks get a numeral, winds get the letter. */
+function cornerIndex(suit: Suit, val: TileVal): { text: string; color: string } | null {
+  if (suit === "cracks") return { text: String(val), color: "text-red-700" };
+  if (suit === "wind")   return { text: String(val), color: "text-blue-800" };
+  return null;
+}
+
 interface TileFaceProps {
   suit: Suit;
   val: TileVal;
@@ -59,6 +74,18 @@ export default function TileFace({
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={src} alt="" draggable={false} className="max-w-full max-h-full object-contain pointer-events-none" />
+      {(() => {
+        const idx = cornerIndex(suit, val);
+        if (!idx) return null;
+        return (
+          <span
+            aria-hidden="true"
+            className={`absolute ${BADGE_CLASSES[size]} ${idx.color} font-bold leading-none pointer-events-none drop-shadow-[0_0_2px_rgba(255,255,255,0.95)]`}
+          >
+            {idx.text}
+          </span>
+        );
+      })()}
       {highlighted && (
         <span className="absolute -top-2 -right-1 text-[10px] text-orange-600 font-bold">↓</span>
       )}
