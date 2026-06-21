@@ -29,6 +29,13 @@ const MODES = [
     badge: "bg-violet-100 text-violet-700",
     description: "Replay saved games turn-by-turn with win probability charts and key moments.",
   },
+  {
+    href: "/patterns",
+    label: "Patterns",
+    color: "bg-rose-600 hover:bg-rose-700",
+    badge: "bg-rose-100 text-rose-700",
+    description: "Browse the NMJL 2025 card — every winning hand with tile breakdowns and point values.",
+  },
 ];
 
 export default function Home() {
