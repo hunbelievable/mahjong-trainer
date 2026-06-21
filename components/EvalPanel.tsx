@@ -1,7 +1,7 @@
 "use client";
 
 import type { EvalResult } from "@/engine/evaluator";
-import { tileLabel } from "@/lib/shorthand";
+import TileFace from "./TileFace";
 
 interface EvalPanelProps {
   result: EvalResult | null;
@@ -110,12 +110,9 @@ export default function EvalPanel({ result, handSize }: EvalPanelProps) {
             {result.outs
               .sort((a, b) => b.liveCount - a.liveCount)
               .map(out => (
-                <span
-                  key={`${out.suit}:${out.val}`}
-                  className="px-1.5 py-0.5 text-xs font-mono rounded bg-indigo-50 text-indigo-800 border border-indigo-200"
-                >
-                  {tileLabel(out.suit, out.val)}
-                  <span className="ml-0.5 text-indigo-400">×{out.liveCount}</span>
+                <span key={`${out.suit}:${out.val}`} className="inline-flex items-center gap-1">
+                  <TileFace suit={out.suit} val={out.val} size="xs" />
+                  <span className="text-xs text-indigo-500 font-semibold">×{out.liveCount}</span>
                 </span>
               ))}
           </div>

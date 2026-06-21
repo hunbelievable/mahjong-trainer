@@ -5,7 +5,7 @@ import type { GameState } from "@/engine/gameEngine";
 import { CHARLESTON_STEPS } from "@/engine/gameEngine";
 import { useSimulation } from "@/lib/useSimulation";
 import { evaluateHand, bestDiscard } from "@/engine/evaluator";
-import { tileLabel, sortTiles } from "@/lib/shorthand";
+import { sortTiles } from "@/lib/shorthand";
 import type { DifficultyLevel, ClaimType } from "@/engine/cpu";
 import { greedyStrategy, chooseTilesForCharleston } from "@/engine/cpu";
 import type { PlayerId } from "@/engine/tiles";
@@ -13,6 +13,7 @@ import HandDisplay from "@/components/HandDisplay";
 import EvalPanel from "@/components/EvalPanel";
 import DiscardBoard from "@/components/DiscardBoard";
 import PatternTracker from "@/components/PatternTracker";
+import TileFace from "@/components/TileFace";
 import { useGameSession } from "@/lib/useGameSession";
 import { detectDiscards } from "@/lib/detectDiscards";
 
@@ -314,26 +315,26 @@ export default function SimulationPage() {
                         const isSuggested = charlestonSuggestedIds.has(tile.id);
                         const isDisabled = isJoker || (!isSelected && charlestonSelection.size >= 3);
                         return (
-                          <div key={tile.id} className="relative">
-                            <button
-                              onClick={() => toggleCharlestonTile(tile.id, isJoker)}
-                              disabled={isDisabled}
-                              className={`
-                                px-2.5 py-1.5 rounded text-sm font-mono font-semibold border-2 transition-all
-                                ${isJoker
-                                  ? "bg-gray-50 border-gray-200 text-gray-300 cursor-not-allowed"
-                                  : isSelected
-                                  ? "bg-violet-600 border-violet-600 text-white shadow-md scale-105"
-                                  : isDisabled
-                                  ? "bg-gray-100 border-gray-200 text-gray-400 cursor-not-allowed"
-                                  : isSuggested
-                                  ? "bg-emerald-50 border-emerald-400 text-emerald-800 hover:bg-emerald-100 cursor-pointer"
-                                  : "bg-white border-gray-300 text-gray-700 hover:border-violet-400 hover:bg-violet-50 cursor-pointer"
-                                }
-                              `}
-                            >
-                              {tileLabel(tile.suit, tile.val)}
-                            </button>
+                          <div
+                            key={tile.id}
+                            className={`
+                              relative rounded-md p-0.5 transition-all
+                              ${isSelected
+                                ? "bg-violet-600 ring-2 ring-violet-600 scale-105 shadow-md"
+                                : isSuggested && !isDisabled
+                                ? "bg-emerald-100 ring-2 ring-emerald-400"
+                                : ""
+                              }
+                            `}
+                          >
+                            <TileFace
+                              suit={tile.suit}
+                              val={tile.val}
+                              size="sm"
+                              dimmed={isDisabled && !isSelected}
+                              onClick={isDisabled ? undefined : () => toggleCharlestonTile(tile.id, isJoker)}
+                              title={isJoker ? "Jokers cannot be passed" : undefined}
+                            />
                             {isSuggested && !isSelected && !isDisabled && (
                               <span className="absolute -top-1.5 -right-1.5 text-[9px] bg-emerald-500 text-white rounded-full w-3.5 h-3.5 flex items-center justify-center font-bold leading-none">
                                 ✓
@@ -391,10 +392,10 @@ export default function SimulationPage() {
               {/* Claim window */}
               {claimWindow && (
                 <div className="bg-amber-50 border-2 border-amber-400 rounded-lg p-4">
-                  <div className="text-sm font-bold text-amber-800 mb-2">
-                    {SEAT_LABELS[claimWindow.discardedBy]} discards{" "}
-                    <span className="font-mono">{tileLabel(claimWindow.discard.suit, claimWindow.discard.val)}</span>
-                    {" "}— claim it?
+                  <div className="text-sm font-bold text-amber-800 mb-2 flex items-center gap-1.5 flex-wrap">
+                    <span>{SEAT_LABELS[claimWindow.discardedBy]} discards</span>
+                    <TileFace suit={claimWindow.discard.suit} val={claimWindow.discard.val} size="xs" />
+                    <span>— claim it?</span>
                   </div>
                   <div className="flex gap-2 flex-wrap">
                     {claimWindow.eligibleTypes.map(ct => (
@@ -465,14 +466,9 @@ export default function SimulationPage() {
                     <span className="text-xs text-gray-500 font-semibold uppercase">Exposed</span>
                     <div className="flex gap-2 mt-1 flex-wrap">
                       {state.melds[humanSeat].map((meld, i) => (
-                        <div key={i} className="flex gap-0.5">
+                        <div key={i} className="flex gap-0.5 p-1 rounded bg-indigo-50 border border-indigo-200">
                           {meld.tiles.map(t => (
-                            <span
-                              key={t.id}
-                              className="px-1.5 py-0.5 text-xs font-mono rounded bg-indigo-100 text-indigo-800 border border-indigo-200"
-                            >
-                              {tileLabel(t.suit, t.val)}
-                            </span>
+                            <TileFace key={t.id} suit={t.suit} val={t.val} size="xs" />
                           ))}
                         </div>
                       ))}
@@ -502,14 +498,9 @@ export default function SimulationPage() {
                         </span>
                         <div className="flex gap-1.5 flex-wrap">
                           {state.melds[seat].map((meld, i) => (
-                            <div key={i} className="flex gap-0.5">
+                            <div key={i} className="flex gap-0.5 p-1 rounded bg-gray-50 border border-gray-200">
                               {meld.tiles.map(t => (
-                                <span
-                                  key={t.id}
-                                  className="px-1 py-0.5 text-xs font-mono rounded bg-gray-100 text-gray-700"
-                                >
-                                  {tileLabel(t.suit, t.val)}
-                                </span>
+                                <TileFace key={t.id} suit={t.suit} val={t.val} size="xs" />
                               ))}
                             </div>
                           ))}

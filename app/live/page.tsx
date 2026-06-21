@@ -8,7 +8,7 @@ import {
   buildEvalWall,
 } from "@/lib/liveGame";
 import type { LiveGameAction } from "@/lib/liveGame";
-import { parseShorthand, ALL_TILE_TYPES, tileLabel } from "@/lib/shorthand";
+import { parseShorthand, ALL_TILE_TYPES } from "@/lib/shorthand";
 import type { TileType } from "@/lib/shorthand";
 import { evaluateHand, bestDiscard } from "@/engine/evaluator";
 import { greedyStrategy, chooseTilesForCharleston } from "@/engine/cpu";
@@ -18,6 +18,7 @@ import TilePicker from "@/components/TilePicker";
 import HandDisplay from "@/components/HandDisplay";
 import DiscardBoard from "@/components/DiscardBoard";
 import EvalPanel from "@/components/EvalPanel";
+import TileFace from "@/components/TileFace";
 
 const SEATS: PlayerId[] = ["E", "S", "W", "N"];
 const SEAT_LABELS: Record<PlayerId, string> = { E: "East", S: "South", W: "West", N: "North" };
@@ -326,12 +327,7 @@ export default function LivePage() {
               </p>
               <div className="flex gap-1.5 flex-wrap">
                 {charlestonAdvice.map(tile => (
-                  <span
-                    key={tile.id}
-                    className="px-2 py-1 text-sm font-mono font-semibold rounded bg-emerald-600 text-white"
-                  >
-                    {tileLabel(tile.suit, tile.val)}
-                  </span>
+                  <TileFace key={tile.id} suit={tile.suit} val={tile.val} size="sm" />
                 ))}
               </div>
               <p className="text-xs text-emerald-500 leading-relaxed">

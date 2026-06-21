@@ -4,11 +4,12 @@ import { useState, useMemo, useCallback } from "react";
 import { useObserve } from "@/lib/useObserve";
 import type { ObserveSpeed } from "@/lib/useObserve";
 import { evaluateHand } from "@/engine/evaluator";
-import { tileLabel, sortTiles } from "@/lib/shorthand";
+import { sortTiles } from "@/lib/shorthand";
+import TileFace from "@/components/TileFace";
 import { DIFFICULTY_PRESETS } from "@/engine/cpu";
 import type { DifficultyLevel } from "@/engine/cpu";
 import type { PlayerId } from "@/engine/tiles";
-import type { Tile, Suit } from "@/engine/tiles";
+import type { Tile } from "@/engine/tiles";
 import PatternTracker from "@/components/PatternTracker";
 import { useGameSession } from "@/lib/useGameSession";
 import { detectDiscards } from "@/lib/detectDiscards";
@@ -30,16 +31,6 @@ const SPEED_OPTIONS: { value: ObserveSpeed; label: string }[] = [
   { value: "fast",      label: "Fast" },
   { value: "ludicrous", label: "Ludicrous" },
 ];
-
-const SUIT_PILL: Record<Suit, string> = {
-  dots:   "bg-blue-100 text-blue-800",
-  bams:   "bg-green-100 text-green-800",
-  cracks: "bg-red-100 text-red-800",
-  wind:   "bg-yellow-100 text-yellow-800",
-  dragon: "bg-purple-100 text-purple-800",
-  flower: "bg-pink-100 text-pink-800",
-  joker:  "bg-gray-100 text-gray-800",
-};
 
 function MiniHand({ tiles, label, isActive, isWinner }: {
   tiles: Tile[];
@@ -64,12 +55,7 @@ function MiniHand({ tiles, label, isActive, isWinner }: {
       </div>
       <div className="flex gap-0.5 flex-wrap min-h-6">
         {sorted.map(t => (
-          <span
-            key={t.id}
-            className={`px-1.5 py-0.5 text-xs font-mono rounded font-medium ${SUIT_PILL[t.suit]}`}
-          >
-            {tileLabel(t.suit, t.val)}
-          </span>
+          <TileFace key={t.id} suit={t.suit} val={t.val} size="xs" />
         ))}
         {tiles.length === 0 && (
           <span className="text-xs text-gray-300 italic">—</span>
@@ -328,14 +314,9 @@ export default function ObservePage() {
                 {SEAT_ORDER.map(seat => (
                   <div key={seat} className="flex gap-2 items-start">
                     <span className="text-xs text-gray-500 w-16 shrink-0 pt-0.5">{SEAT_LABELS[seat]}</span>
-                    <div className="flex gap-0.5 flex-wrap min-h-5">
+                    <div className="flex gap-0.5 flex-wrap min-h-5 items-center">
                       {(state.discardPile[seat] ?? []).map(t => (
-                        <span
-                          key={t.id}
-                          className={`px-1 py-0 text-xs font-mono rounded ${SUIT_PILL[t.suit]}`}
-                        >
-                          {tileLabel(t.suit, t.val)}
-                        </span>
+                        <TileFace key={t.id} suit={t.suit} val={t.val} size="xs" />
                       ))}
                       {!state.discardPile[seat]?.length && (
                         <span className="text-xs text-gray-300">—</span>

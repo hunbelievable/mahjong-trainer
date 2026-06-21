@@ -1,7 +1,7 @@
 "use client";
 
-import { tileLabel } from "@/lib/shorthand";
-import type { Tile, PlayerId, Suit } from "@/engine/tiles";
+import TileFace from "./TileFace";
+import type { Tile, PlayerId } from "@/engine/tiles";
 
 interface DiscardBoardProps {
   discards: Record<PlayerId, Tile[]>;
@@ -15,16 +15,6 @@ const SEAT_LABELS: Record<PlayerId, string> = {
   S: "South",
   W: "West",
   N: "North",
-};
-
-const SUIT_COLORS: Record<Suit, string> = {
-  dots:   "bg-blue-100 text-blue-800",
-  bams:   "bg-green-100 text-green-800",
-  cracks: "bg-red-100 text-red-800",
-  wind:   "bg-yellow-100 text-yellow-800",
-  dragon: "bg-purple-100 text-purple-800",
-  flower: "bg-pink-100 text-pink-800",
-  joker:  "bg-gray-100 text-gray-800",
 };
 
 const SEAT_ORDER: PlayerId[] = ["E", "S", "W", "N"];
@@ -43,29 +33,25 @@ export default function DiscardBoard({
           <div key={seat} className="flex gap-2 items-start">
             <span
               className={`
-                text-xs font-semibold w-14 shrink-0 pt-1
+                text-xs font-semibold w-14 shrink-0 pt-2
                 ${isMe ? "text-indigo-700" : "text-gray-500"}
               `}
             >
               {SEAT_LABELS[seat]}{isMe ? " ★" : ""}
             </span>
-            <div className="flex gap-0.5 flex-wrap min-h-6">
+            <div className="flex gap-1 flex-wrap min-h-8">
               {tiles.length === 0 && (
-                <span className="text-xs text-gray-300 italic pt-0.5">—</span>
+                <span className="text-xs text-gray-300 italic pt-1">—</span>
               )}
               {tiles.map(tile => (
-                <button
+                <TileFace
                   key={tile.id}
-                  onClick={() => onRemove?.(tile, seat)}
-                  className={`
-                    px-1.5 py-0 text-xs font-mono rounded font-medium
-                    ${SUIT_COLORS[tile.suit]}
-                    ${onRemove ? "cursor-pointer hover:opacity-70" : "cursor-default"}
-                  `}
-                  title={onRemove ? "Click to remove" : tile.id}
-                >
-                  {tileLabel(tile.suit, tile.val)}
-                </button>
+                  suit={tile.suit}
+                  val={tile.val}
+                  size="xs"
+                  onClick={onRemove ? () => onRemove(tile, seat) : undefined}
+                  title={onRemove ? "Click to remove" : undefined}
+                />
               ))}
             </div>
           </div>

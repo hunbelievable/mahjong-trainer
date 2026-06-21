@@ -3,6 +3,8 @@
 import { useMemo, useState } from "react";
 import { PATTERNS } from "@/engine/patterns";
 import type { HandPatternTemplate, TemplateGroup, SuitSpec } from "@/engine/patterns";
+import type { Suit, TileVal } from "@/engine/tiles";
+import TileFace from "@/components/TileFace";
 
 // ── Section metadata ────────────────────────────────────────────────────────
 
@@ -49,24 +51,25 @@ const SECTION_BG: Record<string, string> = {
 
 // ── Tile chip rendering ──────────────────────────────────────────────────────
 
-const SUIT_CHIP: Record<string, string> = {
-  dots:   "bg-blue-500 text-white",
-  bams:   "bg-green-600 text-white",
-  cracks: "bg-red-600 text-white",
-  wind:   "bg-amber-400 text-amber-900",
-  dragon: "bg-purple-600 text-white",
-  flower: "bg-pink-500 text-white",
-  joker:  "bg-gray-700 text-white",
-  SA:     "bg-blue-400 text-white",
-  SB:     "bg-green-500 text-white",
-  SC:     "bg-red-500 text-white",
+/** Suit-keyed text color for variable tile placeholders. Background stays white to match the SVG tile set. */
+const SUIT_TEXT_COLOR: Record<string, string> = {
+  dots:   "text-blue-600",
+  bams:   "text-green-700",
+  cracks: "text-red-700",
+  wind:   "text-amber-700",
+  dragon: "text-purple-700",
+  flower: "text-pink-600",
+  joker:  "text-gray-700",
+  SA:     "text-blue-500",
+  SB:     "text-green-600",
+  SC:     "text-red-600",
 };
 
 function suitShort(suit: SuitSpec): string {
   const map: Record<string, string> = {
     dots: "D", bams: "B", cracks: "C",
-    wind: "W", dragon: "Dr", flower: "F", joker: "Jkr",
-    SA: "·", SB: "B", SC: "C",
+    wind: "W", dragon: "Dr", flower: "F", joker: "J",
+    SA: "A", SB: "B", SC: "C",
   };
   return map[suit as string] ?? String(suit);
 }
@@ -86,24 +89,63 @@ function valShort(g: TemplateGroup): string {
   return map[v as string] ?? String(v);
 }
 
-function TileGroup({ group, jokerLocked }: { group: TemplateGroup; jokerLocked?: boolean }) {
-  const chipColor = SUIT_CHIP[group.suit as string] ?? "bg-gray-500 text-white";
-  const label = `${suitShort(group.suit)}${valShort(group)}`;
+/** Tile-shaped placeholder for variable groups — matches the TileFace shell so a row of tiles is visually consistent. */
+function VariableTile({ suit, val, title }: { suit: SuitSpec; val: string; title?: string }) {
+  const color = SUIT_TEXT_COLOR[suit as string] ?? "text-gray-700";
   return (
-    <span className="inline-flex gap-0.5 items-center">
+    <span
+      title={title}
+      className={`
+        w-6 h-8 inline-flex flex-col items-center justify-center leading-none
+        rounded-md border border-stone-300 bg-white p-0.5
+        shadow-[0_1px_0_#bdb39a,0_2px_3px_rgba(0,0,0,0.18)]
+        ${color}
+      `}
+    >
+      <span className="text-[8px] font-semibold opacity-70">{suitShort(suit)}</span>
+      <span className="text-[11px] font-bold">{val}</span>
+    </span>
+  );
+}
+
+/** Resolve a TemplateGroup to a concrete tile face (or null if any part is a variable). */
+function concreteTile(group: TemplateGroup): { suit: Suit; val: TileVal } | null {
+  if (group.windVar) return null;
+  if (group.suit === "SA" || group.suit === "SB" || group.suit === "SC") return null;
+
+  const v = group.val;
+  if (typeof v === "object" && "v" in v) return null; // {v: N+offset}
+  if (v === "DRAGON_ANY") return null;
+
+  if (v === "ZERO") return { suit: "dragon", val: "white" };
+  return { suit: group.suit as Suit, val: v as TileVal };
+}
+
+function TileGroup({ group, jokerLocked }: { group: TemplateGroup; jokerLocked?: boolean }) {
+  const tile = concreteTile(group);
+  const title = jokerLocked ? "No jokers" : undefined;
+
+  if (tile) {
+    return (
+      <span
+        className={`inline-flex gap-0.5 items-center ${jokerLocked ? "ring-2 ring-rose-300 rounded-md p-0.5" : ""}`}
+        title={title}
+      >
+        {Array.from({ length: group.count }).map((_, i) => (
+          <TileFace key={i} suit={tile.suit} val={tile.val} size="xs" />
+        ))}
+      </span>
+    );
+  }
+
+  const val = valShort(group);
+  return (
+    <span
+      className={`inline-flex gap-0.5 items-center ${jokerLocked ? "ring-2 ring-rose-300 rounded-md p-0.5" : ""}`}
+      title={title}
+    >
       {Array.from({ length: group.count }).map((_, i) => (
-        <span
-          key={i}
-          className={`
-            inline-flex items-center justify-center
-            w-7 h-8 rounded text-[10px] font-bold leading-none
-            ${chipColor}
-            ${jokerLocked ? "ring-1 ring-offset-0 ring-white/60" : ""}
-          `}
-          title={jokerLocked ? "No jokers" : undefined}
-        >
-          {label}
-        </span>
+        <VariableTile key={i} suit={group.suit} val={val} title={title} />
       ))}
     </span>
   );
@@ -205,13 +247,7 @@ function Legend() {
       </summary>
       <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-gray-600 leading-relaxed">
         <div>
-          <strong>Tile chips</strong> — each chip shows suit + value.
-          Suits: <span className="font-mono px-1 rounded bg-blue-500 text-white">·N</span> Dots,{" "}
-          <span className="font-mono px-1 rounded bg-green-600 text-white">BN</span> Bams,{" "}
-          <span className="font-mono px-1 rounded bg-red-600 text-white">CN</span> Cracks,{" "}
-          <span className="font-mono px-1 rounded bg-amber-400 text-amber-900">W</span> Wind,{" "}
-          <span className="font-mono px-1 rounded bg-purple-600 text-white">Dr</span> Dragon,{" "}
-          <span className="font-mono px-1 rounded bg-pink-500 text-white">F</span> Flower
+          <strong>Tiles</strong> — fixed tiles show the real tile face. When the suit or value varies, a white placeholder tile shows the variable: the small letter on top is the suit (<span className="font-mono text-blue-600">D</span> dots, <span className="font-mono text-green-700">B</span> bams, <span className="font-mono text-red-700">C</span> cracks, <span className="font-mono text-amber-700">W</span> wind, <span className="font-mono text-purple-700">Dr</span> dragon, or <span className="font-mono text-blue-500">A</span>/<span className="font-mono text-green-600">B</span>/<span className="font-mono text-red-600">C</span> suit variable), and the larger character below is the value.
         </div>
         <div>
           <strong>Suit variables</strong> — SA, SB, SC are distinct suited suits (dots / bams / cracks) that must each be a different suit within the hand.
