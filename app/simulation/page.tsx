@@ -38,6 +38,7 @@ export default function SimulationPage() {
   });
 
   const [sorted, setSorted] = useState(true);
+  const [coachingEnabled, setCoachingEnabled] = useState(true);
   const [charlestonSelection, setCharlestonSelection] = useState<Set<string>>(new Set());
 
   const { state, startGame, discard, claim, pass, reset,
@@ -101,10 +102,10 @@ export default function SimulationPage() {
 
   // Charleston coaching: which tiles does the greedy strategy suggest passing?
   const charlestonSuggestedIds = useMemo(() => {
-    if (state.phase !== "charleston" || humanHand.length === 0) return new Set<string>();
+    if (!coachingEnabled || state.phase !== "charleston" || humanHand.length === 0) return new Set<string>();
     const suggested = chooseTilesForCharleston(greedyStrategy, humanHand, state.wall);
     return new Set(suggested.map(t => t.id));
-  }, [state.phase, humanHand, state.wall]);
+  }, [coachingEnabled, state.phase, humanHand, state.wall]);
 
   // Discard coaching: evaluate the full hand (in-hand + melds) but only surface
   // in-hand tiles as discard candidates (you can't discard meld tiles).
@@ -171,6 +172,17 @@ export default function SimulationPage() {
         <div className="flex items-center gap-3">
           <span className="text-xs text-gray-500">You: <strong>East</strong></span>
           <span className="text-xs text-gray-500">Turn {state.turnNumber}</span>
+          <button
+            onClick={() => setCoachingEnabled(c => !c)}
+            className={`text-xs rounded px-2 py-1 border transition-colors ${
+              coachingEnabled
+                ? "bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100"
+                : "bg-gray-50 text-gray-500 border-gray-300 hover:bg-gray-100"
+            }`}
+            title="Show or hide AI suggestions for Charleston passes and discards"
+          >
+            Coaching {coachingEnabled ? "On" : "Off"}
+          </button>
           <button
             onClick={reset}
             className="text-xs text-red-500 hover:text-red-700 border border-red-200 hover:border-red-400 rounded px-2 py-1 transition-colors"
@@ -347,8 +359,13 @@ export default function SimulationPage() {
 
                     {/* Legend */}
                     <p className="text-xs text-gray-400">
-                      <span className="inline-block w-2 h-2 rounded-sm bg-emerald-400 mr-1 align-middle" />
-                      Green = AI suggests passing · Click to select · Purple = your selection
+                      {coachingEnabled && (
+                        <>
+                          <span className="inline-block w-2 h-2 rounded-sm bg-emerald-400 mr-1 align-middle" />
+                          Green = AI suggests passing ·{" "}
+                        </>
+                      )}
+                      Click to select · Purple = your selection
                     </p>
 
                     <div className="flex items-center gap-4">
@@ -455,7 +472,7 @@ export default function SimulationPage() {
 
                 <HandDisplay
                   tiles={humanHand}
-                  suggestedDiscardIds={isHumanTurn ? simSuggestedDiscardIds : undefined}
+                  suggestedDiscardIds={isHumanTurn && coachingEnabled ? simSuggestedDiscardIds : undefined}
                   onTileClick={isHumanTurn ? (tile) => discard(tile.id) : undefined}
                   label=""
                 />

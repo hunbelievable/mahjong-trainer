@@ -245,21 +245,59 @@ function Legend() {
       <summary className="cursor-pointer text-xs font-semibold text-gray-600 hover:text-gray-800 select-none">
         How to read this card ▸
       </summary>
-      <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-gray-600 leading-relaxed">
-        <div>
-          <strong>Tiles</strong> — fixed tiles show the real tile face. When the suit or value varies, a white placeholder tile shows the variable: the small letter on top is the suit (<span className="font-mono text-blue-600">D</span> dots, <span className="font-mono text-green-700">B</span> bams, <span className="font-mono text-red-700">C</span> cracks, <span className="font-mono text-amber-700">W</span> wind, <span className="font-mono text-purple-700">Dr</span> dragon, or <span className="font-mono text-blue-500">A</span>/<span className="font-mono text-green-600">B</span>/<span className="font-mono text-red-600">C</span> suit variable), and the larger character below is the value.
+      <div className="mt-3 space-y-4 text-xs text-gray-600 leading-relaxed">
+
+        <div className="flex items-start gap-3">
+          <div className="flex gap-0.5 shrink-0 pt-0.5">
+            <TileFace suit="dots" val={5} size="xs" />
+            <TileFace suit="dragon" val="white" size="xs" />
+            <TileFace suit="flower" val="flower" size="xs" />
+          </div>
+          <div>
+            <strong>Fixed tiles</strong> show the real tile face. The framed-empty tile is the <em>soap</em> (white dragon, also written as <code>0</code>).
+          </div>
         </div>
-        <div>
-          <strong>Suit variables</strong> — SA, SB, SC are distinct suited suits (dots / bams / cracks) that must each be a different suit within the hand.
+
+        <div className="flex items-start gap-3">
+          <div className="flex gap-0.5 shrink-0 pt-0.5">
+            <VariableTile suit="SA" val="2" />
+            <VariableTile suit="dragon" val="D" />
+            <VariableTile suit="SB" val="N+1" />
+          </div>
+          <div>
+            <strong>Placeholder tiles</strong> stand in for a slot whose suit or value is not fixed. The small letter on top is the <em>suit/category</em>; the larger character below is the <em>value</em>.
+          </div>
         </div>
-        <div>
-          <strong>Value variables</strong> — <code>N</code> = any valid tile value; <code>N+1</code> = one higher.{" "}
-          <code>0</code> = white dragon; <code>D</code> = any dragon.
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5">
+          <div>
+            <strong>Suit codes</strong>
+            <ul className="mt-1 space-y-0.5 list-none">
+              <li><code className="font-mono text-blue-500">A</code>, <code className="font-mono text-green-600">B</code>, <code className="font-mono text-red-600">C</code> — three <em>suit variables</em>: each must be a different suited suit (dots/bams/cracks), but which suit is which is up to you.</li>
+              <li><code className="font-mono text-amber-700">W</code> wind · <code className="font-mono text-purple-700">Dr</code> dragon</li>
+            </ul>
+          </div>
+          <div>
+            <strong>Value codes</strong>
+            <ul className="mt-1 space-y-0.5 list-none">
+              <li><code>N</code> = any valid value; <code>N+1</code>, <code>N+2</code> = one or two higher (used for runs)</li>
+              <li><code>D</code> = any one dragon color · <code>0</code> = white dragon · <code>E S W N</code> = winds</li>
+            </ul>
+          </div>
         </div>
-        <div>
-          <strong>Ring border on chip</strong> — that group cannot use joker tiles.
-          <br /><strong>closed hand</strong> — no exposed melds allowed.
+
+        <div className="flex items-start gap-3">
+          <div className="shrink-0 pt-0.5">
+            <span className="inline-block ring-2 ring-rose-300 rounded-md p-0.5">
+              <TileFace suit="flower" val="flower" size="xs" />
+            </span>
+          </div>
+          <div>
+            <strong>Rose ring around a group</strong> means that group cannot be filled with jokers (typically pairs and singles).{" "}
+            <strong className="ml-1">closed hand</strong> means no exposed melds are allowed for that pattern.
+          </div>
         </div>
+
       </div>
     </details>
   );
