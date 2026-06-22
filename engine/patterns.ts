@@ -259,20 +259,20 @@ export const PATTERNS: HandPatternTemplate[] = [
     ],
   },
 
-  // FFF 0000 222 5555 (Any 2 Suits) × 25
+  // 222 0000 222 5555 (Any 2 Suits) × 25
   {
-    id: "2025_fff_zero_p_k",
-    name: "2025: FFF 0000 222 5555",
+    id: "2025_p_zero_p_k",
+    name: "2025: 222 0000 222 5555",
     section: "2025",
     difficulty: "medium",
     value: 25,
-    description: "FFF 0000 222 5555 — any 2 suits",
+    description: "222 0000 222 5555 — any 2 suits",
     suitMode: "2suits",
     valMode: { kind: "fixed" },
     groups: [
-      { suit: "flower", val: "flower" as TileVal,  count: 3, jokerLocked: true },
-      { suit: "dragon", val: "white" as DragonVal, count: 4 },
       { suit: "SA",     val: 2 as SuitedVal,       count: 3 },
+      { suit: "dragon", val: "white" as DragonVal, count: 4 },
+      { suit: "SB",     val: 2 as SuitedVal,       count: 3 },
       { suit: "SB",     val: 5 as SuitedVal,       count: 4 },
     ],
   },
@@ -457,25 +457,25 @@ export const PATTERNS: HandPatternTemplate[] = [
     ],
   },
 
-  // 1111 2468 222 222 (Any 3 Suits, Like Pungs Any Even No.) × 25
-  // 1111=kong 1s in SA; 2,4,6,8 singles in SA; two pungs of V-even in SB & SC
+  // FFFF 2468 222 222 (Any 3 Suits, Like Pungs Any Even No.) × 25
+  // FFFF flowers + 2,4,6,8 singles in SA + two pungs of V-even in SB & SC
   {
-    id: "2468_k1_singles_pp_pp",
-    name: "2468: 1111 2468 222 222",
+    id: "2468_ffff_singles_pp_pp",
+    name: "2468: FFFF 2468 222 222",
     section: "2468",
     difficulty: "medium",
     value: 25,
-    description: "1111 2468 222 222 — any 3 suits, like pungs of any even number",
+    description: "FFFF 2468 222 222 — any 3 suits, like pungs of any even number",
     suitMode: "3suits",
     valMode: { kind: "even" },
     groups: [
-      { suit: "SA", val: 1 as SuitedVal, count: 4 },
-      { suit: "SA", val: 2 as SuitedVal, count: 1 },
-      { suit: "SA", val: 4 as SuitedVal, count: 1 },
-      { suit: "SA", val: 6 as SuitedVal, count: 1 },
-      { suit: "SA", val: 8 as SuitedVal, count: 1 },
-      { suit: "SB", val: { v: 0 },        count: 3 },
-      { suit: "SC", val: { v: 0 },        count: 3 },
+      { suit: "flower", val: "flower",       count: 4, jokerLocked: true },
+      { suit: "SA",     val: 2 as SuitedVal, count: 1 },
+      { suit: "SA",     val: 4 as SuitedVal, count: 1 },
+      { suit: "SA",     val: 6 as SuitedVal, count: 1 },
+      { suit: "SA",     val: 8 as SuitedVal, count: 1 },
+      { suit: "SB",     val: { v: 0 },       count: 3 },
+      { suit: "SC",     val: { v: 0 },       count: 3 },
     ],
   },
 
@@ -652,22 +652,22 @@ export const PATTERNS: HandPatternTemplate[] = [
     ],
   },
 
-  // NNNN 111 11111 11 (Any 3 Suits, Any Like Nos.) × 45
-  // wind kong + pung + quint + pair of same number across 3 suits
+  // FF 11111 11 11111 (Any 3 Suits, Any Like Nos.) × 45
+  // FF + quint V (SA) + pair V (SB) + quint V (SC) — all the same number across 3 suits
   {
-    id: "quint_wk_p_q_pr",
-    name: "Quints: NNNN 111 11111 11",
+    id: "quint_ff_q_pr_q",
+    name: "Quints: FF 11111 11 11111",
     section: "quints",
     difficulty: "hard",
     value: 45,
-    description: "NNNN 111 11111 11 — any 3 suits, any like numbers, any wind",
+    description: "FF 11111 11 11111 — any 3 suits, any like numbers",
     suitMode: "3suits",
     valMode: { kind: "any" },
     groups: [
-      { suit: "wind", val: "E" as WindVal, count: 4, windVar: true },
-      { suit: "SA",   val: { v: 0 }, count: 3 },
-      { suit: "SB",   val: { v: 0 }, count: 5 },
-      { suit: "SC",   val: { v: 0 }, count: 2, jokerLocked: true },
+      { suit: "flower", val: "flower", count: 2, jokerLocked: true },
+      { suit: "SA",     val: { v: 0 }, count: 5 },
+      { suit: "SB",     val: { v: 0 }, count: 2, jokerLocked: true },
+      { suit: "SC",     val: { v: 0 }, count: 5 },
     ],
   },
 
@@ -724,27 +724,22 @@ export const PATTERNS: HandPatternTemplate[] = [
     ],
   },
 
-  // FFF 1111 22 3333 or FFFF 111 22 333 (Any 1 or 3 Suits, Any 3 Consec.) × 25
+  // FFFF 1111 22 3333 (Any 1 or 3 Suits, Any 3 Consec.) × 25
+  // 3-suit variant — singles+kongs across 3 suit variables.
   {
-    id: "consec_fff_3suits",
-    name: "Consecutive: FFF 1111 22 3333",
+    id: "consec_ffff_3suits",
+    name: "Consecutive: FFFF 1111 22 3333",
     section: "consecutive_run",
     difficulty: "medium",
     value: 25,
-    description: "FFF 1111 22 3333 or FFFF 111 22 333 — any 3 suits, any 3 consecutive",
+    description: "FFFF 1111 22 3333 — any 1 or 3 suits, any 3 consecutive numbers",
     suitMode: "3suits",
     valMode: { kind: "consec", len: 3 },
     groups: [
-      { suit: "flower", val: "flower",  count: 3, jokerLocked: true },
+      { suit: "flower", val: "flower",  count: 4, jokerLocked: true },
       { suit: "SA",     val: { v: 0 },  count: 4 },
       { suit: "SB",     val: { v: 1 },  count: 2, jokerLocked: true },
-      { suit: "SC",     val: { v: 2 },  count: 5 },
-    ],
-    altGroups: [
-      { suit: "flower", val: "flower",  count: 4, jokerLocked: true },
-      { suit: "SA",     val: { v: 0 },  count: 3 },
-      { suit: "SB",     val: { v: 1 },  count: 2, jokerLocked: true },
-      { suit: "SC",     val: { v: 2 },  count: 5 },
+      { suit: "SC",     val: { v: 2 },  count: 4 },
     ],
   },
 
@@ -769,21 +764,40 @@ export const PATTERNS: HandPatternTemplate[] = [
     ],
   },
 
-  // FF 111 222 3333 DD (Any 3 Suits, Any 3 Consec. w Opp. Dragons) × 25
+  // FF 11 222 3333 DDD (Any 1 Suit, Any 3 Consec. Nos.) × 25
   {
-    id: "consec_ff_p_p_k_dd",
-    name: "Consecutive: FF 111 222 3333 DD",
+    id: "consec_ff_1suit_dragon_pung",
+    name: "Consecutive: FF 11 222 3333 DDD",
     section: "consecutive_run",
     difficulty: "medium",
     value: 25,
-    description: "FF 111 222 3333 DD — any 3 suits, any 3 consecutive, matching dragon pair",
-    suitMode: "3suits",
+    description: "FF 11 222 3333 DDD — any 1 suit, any 3 consecutive numbers, any dragon",
+    suitMode: "1suit",
     valMode: { kind: "consec", len: 3 },
     groups: [
       { suit: "flower",  val: "flower",     count: 2, jokerLocked: true },
+      { suit: "SA",      val: { v: 0 },     count: 2, jokerLocked: true },
+      { suit: "SA",      val: { v: 1 },     count: 3 },
+      { suit: "SA",      val: { v: 2 },     count: 4 },
+      { suit: "dragon",  val: "DRAGON_ANY", count: 3 },
+    ],
+  },
+
+  // 111 222 3333 DD DD (Any 3 Suits, Any 3 Consec. Nos. w. Opp. Dragons) × 30
+  {
+    id: "consec_3suits_opp_dragons",
+    name: "Consecutive: 111 222 3333 DD DD",
+    section: "consecutive_run",
+    difficulty: "medium",
+    value: 30,
+    description: "111 222 3333 DD DD — any 3 suits, any 3 consecutive, opposite dragon pairs",
+    suitMode: "3suits",
+    valMode: { kind: "consec", len: 3 },
+    groups: [
       { suit: "SA",      val: { v: 0 },     count: 3 },
       { suit: "SB",      val: { v: 1 },     count: 3 },
       { suit: "SC",      val: { v: 2 },     count: 4 },
+      { suit: "dragon",  val: "DRAGON_ANY", count: 2, jokerLocked: true },
       { suit: "dragon",  val: "DRAGON_ANY", count: 2, jokerLocked: true },
     ],
   },
@@ -932,52 +946,75 @@ export const PATTERNS: HandPatternTemplate[] = [
     ],
   },
 
-  // 333 NEWS 333 99 — needs NEWS expansion (one each N/E/W/S wind)
-  // Actually this is "333 N E W S 333 99" in opp suit × 25
-  // Total: 3+1+1+1+1+3+2+? — need 2 more. Let me encode as-read.
-  // From card: "333 NEWS 333 99 (Any 3 Suits in Opp. Dragons)" × 25
-  // Likely: 333(3) + N(1)+E(1)+W(1)+S(1) + 333(3) + 99(2) + D(2)?
-  // = 3+4+3+2+2=14 ✓ if DD is added: "333 NEWS 333 99 DD"
-  // Best interpretation: 3+4+3+2+2=14 with dragon pair
+  // FFFF 1111 + 9999 = 10 (Any 2 Suits, These Nos. Only) × 25
+  // FFFF + kong 1s (SA) + kong 9s (SA, same suit) + single 1 in another suit (SB)
+  // + soap (white dragon = "0"). The "+ 9999 = 10" is the "10" formed by the
+  // single 1 and the soap.
   {
-    id: "13579_news_333",
-    name: "13579: 333 NEWS 333 99",
+    id: "13579_ffff_1_plus_9_eq_10",
+    name: "13579: FFFF 1111 + 9999 = 10",
     section: "13579",
-    difficulty: "hard",
+    difficulty: "medium",
     value: 25,
-    description: "333 NEWS 333 99 — any 3 suits, NEWS winds, matching dragon pair",
-    suitMode: "3suits",
-    valMode: { kind: "fixed" },
-    groups: [
-      { suit: "SA",     val: 3 as SuitedVal,       count: 3 },
-      { suit: "wind",   val: "N" as WindVal,        count: 1 },
-      { suit: "wind",   val: "E" as WindVal,        count: 1 },
-      { suit: "wind",   val: "W" as WindVal,        count: 1 },
-      { suit: "wind",   val: "S" as WindVal,        count: 1 },
-      { suit: "SB",     val: 3 as SuitedVal,        count: 3 },
-      { suit: "SA",     val: 9 as SuitedVal,        count: 2, jokerLocked: true },
-      { suit: "dragon", val: "DRAGON_ANY",           count: 2, jokerLocked: true },
-    ],
-  },
-
-  // 1111 33 NEWS 77 99 (Any 2 Suits) × 30
-  {
-    id: "13579_k_pr_news_pr_pr",
-    name: "13579: 1111 33 NEWS 77 99",
-    section: "13579",
-    difficulty: "hard",
-    value: 30,
-    description: "1111 33 NEWS 77 99 — any 2 suits",
+    description: "FFFF 1111 + 9999 = 10 — kongs of 1s and 9s in one suit, single 1 in another suit, soap as the 0",
     suitMode: "2suits",
     valMode: { kind: "fixed" },
     groups: [
-      { suit: "SA",   val: 1 as SuitedVal, count: 4 },
-      { suit: "SA",   val: 3 as SuitedVal, count: 2, jokerLocked: true },
+      { suit: "flower", val: "flower",              count: 4, jokerLocked: true },
+      { suit: "SA",     val: 1 as SuitedVal,        count: 4 },
+      { suit: "SA",     val: 9 as SuitedVal,        count: 4 },
+      { suit: "SB",     val: 1 as SuitedVal,        count: 1, jokerLocked: true },
+      { suit: "dragon", val: "white" as DragonVal,  count: 1, jokerLocked: true },
+    ],
+  },
+
+  // 555 777 9999 DD DD (Any 3 Suits w Opp. Dragons) × 25
+  {
+    id: "13579_p_p_k_dd_dd",
+    name: "13579: 555 777 9999 DD DD",
+    section: "13579",
+    difficulty: "medium",
+    value: 25,
+    description: "555 777 9999 DD DD — any 3 suits, opposite dragon pairs",
+    suitMode: "3suits",
+    valMode: { kind: "fixed" },
+    groups: [
+      { suit: "SA",     val: 5 as SuitedVal, count: 3 },
+      { suit: "SB",     val: 7 as SuitedVal, count: 3 },
+      { suit: "SC",     val: 9 as SuitedVal, count: 4 },
+      { suit: "dragon", val: "DRAGON_ANY",   count: 2, jokerLocked: true },
+      { suit: "dragon", val: "DRAGON_ANY",   count: 2, jokerLocked: true },
+    ],
+  },
+
+  // 11 333 NEWS 333 55 or 55 777 NEWS 777 99 (Any 2 Suits) × 30
+  {
+    id: "13579_pr_p_news_p_pr",
+    name: "13579: 11 333 NEWS 333 55",
+    section: "13579",
+    difficulty: "hard",
+    value: 30,
+    description: "11 333 NEWS 333 55 or 55 777 NEWS 777 99 — any 2 suits",
+    suitMode: "2suits",
+    valMode: { kind: "fixed" },
+    groups: [
+      { suit: "SA",   val: 1 as SuitedVal, count: 2, jokerLocked: true },
+      { suit: "SA",   val: 3 as SuitedVal, count: 3 },
       { suit: "wind", val: "N" as WindVal, count: 1 },
       { suit: "wind", val: "E" as WindVal, count: 1 },
       { suit: "wind", val: "W" as WindVal, count: 1 },
       { suit: "wind", val: "S" as WindVal, count: 1 },
-      { suit: "SB",   val: 7 as SuitedVal, count: 2, jokerLocked: true },
+      { suit: "SB",   val: 3 as SuitedVal, count: 3 },
+      { suit: "SB",   val: 5 as SuitedVal, count: 2, jokerLocked: true },
+    ],
+    altGroups: [
+      { suit: "SA",   val: 5 as SuitedVal, count: 2, jokerLocked: true },
+      { suit: "SA",   val: 7 as SuitedVal, count: 3 },
+      { suit: "wind", val: "N" as WindVal, count: 1 },
+      { suit: "wind", val: "E" as WindVal, count: 1 },
+      { suit: "wind", val: "W" as WindVal, count: 1 },
+      { suit: "wind", val: "S" as WindVal, count: 1 },
+      { suit: "SB",   val: 7 as SuitedVal, count: 3 },
       { suit: "SB",   val: 9 as SuitedVal, count: 2, jokerLocked: true },
     ],
   },
@@ -1001,22 +1038,33 @@ export const PATTERNS: HandPatternTemplate[] = [
     ],
   },
 
-  // 55 77 555 777 99 (Any 3 Suits) × 30
+  // FF 11 33 111 333 55 or FF 55 77 555 777 99 (Any 3 Suits) C 30
+  // Pair and pung of each odd number swap suits; 5s/9s pair in third suit.
   {
-    id: "13579_pr_pr_p_p_pr",
-    name: "13579: 55 77 555 777 99",
+    id: "13579_ff_pr_pr_p_p_pr",
+    name: "13579: FF 11 33 111 333 55",
     section: "13579",
     difficulty: "hard",
     value: 30,
-    description: "55 77 555 777 99 — any 3 suits",
+    closed: true,
+    description: "FF 11 33 111 333 55 or FF 55 77 555 777 99 — any 3 suits",
     suitMode: "3suits",
     valMode: { kind: "fixed" },
     groups: [
-      { suit: "SA", val: 5 as SuitedVal, count: 2, jokerLocked: true },
-      { suit: "SB", val: 7 as SuitedVal, count: 2, jokerLocked: true },
-      { suit: "SA", val: 5 as SuitedVal, count: 3 },
-      { suit: "SB", val: 7 as SuitedVal, count: 3 },
-      { suit: "SC", val: 9 as SuitedVal, count: 4 },
+      { suit: "flower", val: "flower",       count: 2, jokerLocked: true },
+      { suit: "SA",     val: 1 as SuitedVal, count: 2, jokerLocked: true },
+      { suit: "SB",     val: 3 as SuitedVal, count: 2, jokerLocked: true },
+      { suit: "SB",     val: 1 as SuitedVal, count: 3 },
+      { suit: "SA",     val: 3 as SuitedVal, count: 3 },
+      { suit: "SC",     val: 5 as SuitedVal, count: 2, jokerLocked: true },
+    ],
+    altGroups: [
+      { suit: "flower", val: "flower",       count: 2, jokerLocked: true },
+      { suit: "SA",     val: 5 as SuitedVal, count: 2, jokerLocked: true },
+      { suit: "SB",     val: 7 as SuitedVal, count: 2, jokerLocked: true },
+      { suit: "SB",     val: 5 as SuitedVal, count: 3 },
+      { suit: "SA",     val: 7 as SuitedVal, count: 3 },
+      { suit: "SC",     val: 9 as SuitedVal, count: 2, jokerLocked: true },
     ],
   },
 
@@ -1066,42 +1114,35 @@ export const PATTERNS: HandPatternTemplate[] = [
     ],
   },
 
-  // FFF NN EEE DD DDDD or FFF DDD NEWS DDD (Dragons Any 2 Suits) × 25
+  // FFF NN EE WWW SSSS (Any 1 Suit, Winds Pattern) × 25
+  // Two pairs and two pungs of winds — N/E pair, W pung, S kong
   {
-    id: "wd_fff_winds_dragons",
-    name: "Winds & Dragons: FFF NN EEE DD DDDD",
+    id: "wd_fff_winds",
+    name: "Winds & Dragons: FFF NN EE WWW SSSS",
     section: "winds_dragons",
-    difficulty: "hard",
+    difficulty: "medium",
     value: 25,
-    description: "FFF NN EEE DD DDDD or FFF DDD NEWS DDD — winds + dragons",
+    description: "FFF NN EE WWW SSSS — flowers + wind pairs/pungs/kong",
     suitMode: "none",
     valMode: { kind: "fixed" },
     groups: [
-      { suit: "flower", val: "flower",              count: 3, jokerLocked: true },
-      { suit: "wind",   val: "N"     as WindVal,    count: 2, jokerLocked: true },
-      { suit: "wind",   val: "E"     as WindVal,    count: 3 },
-      { suit: "dragon", val: "DRAGON_ANY",           count: 2, jokerLocked: true },
-      { suit: "dragon", val: "DRAGON_ANY",           count: 4 },
-    ],
-    altGroups: [
-      { suit: "flower", val: "flower",           count: 3, jokerLocked: true },
-      { suit: "dragon", val: "DRAGON_ANY",        count: 3 },
-      { suit: "wind",   val: "N" as WindVal,      count: 1 },
-      { suit: "wind",   val: "E" as WindVal,      count: 1 },
-      { suit: "wind",   val: "W" as WindVal,      count: 1 },
-      { suit: "wind",   val: "S" as WindVal,      count: 1 },
-      { suit: "dragon", val: "DRAGON_ANY",        count: 4 },
+      { suit: "flower", val: "flower",         count: 3, jokerLocked: true },
+      { suit: "wind",   val: "N" as WindVal,   count: 2, jokerLocked: true },
+      { suit: "wind",   val: "E" as WindVal,   count: 2, jokerLocked: true },
+      { suit: "wind",   val: "W" as WindVal,   count: 3 },
+      { suit: "wind",   val: "S" as WindVal,   count: 4 },
     ],
   },
 
-  // FFFF DDD NEWS DDDD × 25
+  // FFFF DDD NEWS DDD (Dragons Any 2 Suits) × 25
+  // Four flowers + dragon pung + all four winds (one each) + dragon pung (different dragon)
   {
-    id: "wd_ffff_dp_news_dk",
-    name: "Winds & Dragons: FFFF DDD NEWS DDDD",
+    id: "wd_ffff_dp_news_dp",
+    name: "Winds & Dragons: FFFF DDD NEWS DDD",
     section: "winds_dragons",
     difficulty: "hard",
     value: 25,
-    description: "FFFF DDD NEWS DDDD — four flowers, dragon pung, all four winds, dragon kong",
+    description: "FFFF DDD NEWS DDD — four flowers, dragon pung, all four winds, dragon pung",
     suitMode: "none",
     valMode: { kind: "fixed" },
     groups: [
@@ -1112,6 +1153,26 @@ export const PATTERNS: HandPatternTemplate[] = [
       { suit: "wind",   val: "W" as WindVal,   count: 1 },
       { suit: "wind",   val: "S" as WindVal,   count: 1 },
       { suit: "dragon", val: "DRAGON_ANY",     count: 3 },
+    ],
+  },
+
+  // NNNN 1 11 111 SSSS (Any Like Odd Nos. in 3 Suits) × 25
+  // N kong + odd-number sequence (single+pair+pung) in 3 suits + S kong
+  {
+    id: "wd_nnnn_like_odd_ssss",
+    name: "Winds & Dragons: NNNN 1 11 111 SSSS",
+    section: "winds_dragons",
+    difficulty: "hard",
+    value: 25,
+    description: "NNNN 1 11 111 SSSS — north kong, like odd numbers in 3 suits, south kong",
+    suitMode: "3suits",
+    valMode: { kind: "odd" },
+    groups: [
+      { suit: "wind", val: "N" as WindVal, count: 4 },
+      { suit: "SA",   val: { v: 0 },       count: 1 },
+      { suit: "SB",   val: { v: 0 },       count: 2, jokerLocked: true },
+      { suit: "SC",   val: { v: 0 },       count: 3 },
+      { suit: "wind", val: "S" as WindVal, count: 4 },
     ],
   },
 
@@ -1156,14 +1217,15 @@ export const PATTERNS: HandPatternTemplate[] = [
     ],
   },
 
-  // NN EE WWW SSS DDDD (Any Odd Nos., Any Dragon) × 30
+  // NN EE WWW SSS DDDD (Kong Any Dragon) C 30
   {
     id: "wd_news_odd_dk",
     name: "Winds & Dragons: NN EE WWW SSS DDDD",
     section: "winds_dragons",
     difficulty: "hard",
     value: 30,
-    description: "NN EE WWW SSS DDDD — any odd suited tiles + any dragon kong",
+    closed: true,
+    description: "NN EE WWW SSS DDDD — pairs and pungs of winds + kong of any dragon",
     suitMode: "none",
     valMode: { kind: "fixed" },
     groups: [
@@ -1242,57 +1304,91 @@ export const PATTERNS: HandPatternTemplate[] = [
     ],
   },
 
-  // FFF 333 369 99999 (Any 2 Suits) × 25
-  // FFF(3) + 333(3) + 3(1)+6(1)+9(1) + 99999(5) = 3+3+3+5=14 ✓
-  // SA has pung of 3s + the "3" and "9" singles; SB has the "6" single + quint of 9s
+  // FFFF 333 369 9999 (Any 2 Suits) × 25
+  // FFFF + 333 pung + single 3/6/9 + 9999 kong across two suits.
   {
-    id: "369_fff_p_singles_quint",
-    name: "369: FFF 333 369 99999",
+    id: "369_ffff_p_369_k",
+    name: "369: FFFF 333 369 9999",
     section: "369",
     difficulty: "medium",
     value: 25,
-    description: "FFF 333 369 99999 — any 2 suits",
+    description: "FFFF 333 369 9999 — any 2 suits",
     suitMode: "2suits",
     valMode: { kind: "fixed" },
     groups: [
-      { suit: "flower", val: "flower",       count: 3, jokerLocked: true },
-      { suit: "SA",     val: 3 as SuitedVal, count: 3 },  // 333 pung
-      { suit: "SA",     val: 3 as SuitedVal, count: 1 },  // single 3 from "369" → 4 total SA-3
-      { suit: "SA",     val: 6 as SuitedVal, count: 1 },  // single 6 from "369"
-      { suit: "SA",     val: 9 as SuitedVal, count: 1 },  // single 9 from "369"
-      { suit: "SB",     val: 9 as SuitedVal, count: 5 },  // 99999 quint in 2nd suit
+      { suit: "flower", val: "flower",       count: 4, jokerLocked: true },
+      { suit: "SA",     val: 3 as SuitedVal, count: 3 }, // 333 pung
+      { suit: "SA",     val: 6 as SuitedVal, count: 1 }, // single 6
+      { suit: "SA",     val: 9 as SuitedVal, count: 1 }, // single 9
+      { suit: "SB",     val: 3 as SuitedVal, count: 1 }, // single 3 in second suit
+      { suit: "SB",     val: 9 as SuitedVal, count: 4 }, // 9999 kong
     ],
   },
 
-  // FFF 33 69 333 6666 (Any 3 Suits, Kongs 3, 6, or 9) × 25
-  // FFF(3) + 33(2) + 6(1) + 9(1) + 333(3) + 6666(4) = 3+2+1+1+3+4=14 ✓
-  // SA: pair of 3s; SB: single 6 + pung of 3s; SC: single 9 + kong of 6s
+  // 33 66 99 3333 3333 (Any 3 Suits, Like Kongs 3, 6, or 9) × 25
+  // Three pairs of 3/6/9 in 3 suits + two kongs of the same number (3, 6, or 9)
+  // in the two suits that don't already hold that number as their pair.
+  // Encoded as three patterns: kong-value 3, 6, and 9.
   {
-    id: "369_fff_33_69_333_6666",
-    name: "369: FFF 33 69 333 6666",
+    id: "369_pairs_kongs_3",
+    name: "369: 33 66 99 3333 3333",
     section: "369",
     difficulty: "hard",
     value: 25,
-    description: "FFF 33 69 333 6666 — any 3 suits, kongs 3, 6, or 9",
+    description: "33 66 99 3333 3333 — any 3 suits, like kongs of 3s",
     suitMode: "3suits",
     valMode: { kind: "fixed" },
     groups: [
-      { suit: "flower", val: "flower",       count: 3, jokerLocked: true },
-      { suit: "SA",     val: 3 as SuitedVal, count: 2, jokerLocked: true },  // 33 pair
-      { suit: "SB",     val: 6 as SuitedVal, count: 1 },                      // single 6
-      { suit: "SC",     val: 9 as SuitedVal, count: 1 },                      // single 9
-      { suit: "SB",     val: 3 as SuitedVal, count: 3 },                      // 333 pung
-      { suit: "SC",     val: 6 as SuitedVal, count: 4 },                      // 6666 kong
+      { suit: "SA", val: 3 as SuitedVal, count: 2, jokerLocked: true }, // pair 3 (SA holds 3s)
+      { suit: "SB", val: 6 as SuitedVal, count: 2, jokerLocked: true }, // pair 6
+      { suit: "SC", val: 9 as SuitedVal, count: 2, jokerLocked: true }, // pair 9
+      { suit: "SB", val: 3 as SuitedVal, count: 4 },                    // kong 3 in SB
+      { suit: "SC", val: 3 as SuitedVal, count: 4 },                    // kong 3 in SC
+    ],
+  },
+  {
+    id: "369_pairs_kongs_6",
+    name: "369: 33 66 99 6666 6666",
+    section: "369",
+    difficulty: "hard",
+    value: 25,
+    description: "33 66 99 6666 6666 — any 3 suits, like kongs of 6s",
+    suitMode: "3suits",
+    valMode: { kind: "fixed" },
+    groups: [
+      { suit: "SA", val: 3 as SuitedVal, count: 2, jokerLocked: true },
+      { suit: "SB", val: 6 as SuitedVal, count: 2, jokerLocked: true },
+      { suit: "SC", val: 9 as SuitedVal, count: 2, jokerLocked: true },
+      { suit: "SA", val: 6 as SuitedVal, count: 4 }, // kong 6 in SA (not SB which holds the 6 pair)
+      { suit: "SC", val: 6 as SuitedVal, count: 4 },
+    ],
+  },
+  {
+    id: "369_pairs_kongs_9",
+    name: "369: 33 66 99 9999 9999",
+    section: "369",
+    difficulty: "hard",
+    value: 25,
+    description: "33 66 99 9999 9999 — any 3 suits, like kongs of 9s",
+    suitMode: "3suits",
+    valMode: { kind: "fixed" },
+    groups: [
+      { suit: "SA", val: 3 as SuitedVal, count: 2, jokerLocked: true },
+      { suit: "SB", val: 6 as SuitedVal, count: 2, jokerLocked: true },
+      { suit: "SC", val: 9 as SuitedVal, count: 2, jokerLocked: true },
+      { suit: "SA", val: 9 as SuitedVal, count: 4 },
+      { suit: "SB", val: 9 as SuitedVal, count: 4 },
     ],
   },
 
-  // FF 333 D 666 D 999 D (Any 3 Suits, Kongs w Matching Dragons) × 30
+  // FF 333 D 666 D 999 D (Any 3 Suits w Matching Dragons) C 30
   {
     id: "369_ff_p_d_p_d_p_d",
     name: "369: FF 333 D 666 D 999 D",
     section: "369",
     difficulty: "hard",
     value: 30,
+    closed: true,
     description: "FF 333 D 666 D 999 D — any 3 suits, each pung with matching dragon",
     suitMode: "3suits",
     valMode: { kind: "fixed" },
@@ -1401,16 +1497,20 @@ export const PATTERNS: HandPatternTemplate[] = [
     ],
   },
 
-  // 11 33 55 77 99 9999 (Any 2 Suits) × 50
+  // 11 33 55 77 99 11 11 (Any 3 Suits, Pairs Any Like Odd Nos. in Opp. Suits) × 50
+  // Seven pairs of odd numbers; one odd value (V) gets paired in all three suits;
+  // the other four odds (1,3,5,7,9 minus V) each get one pair in some suit.
+  // Encoded with V as variable; SA holds the unique pairs 1-5-7 etc., SB/SC echo V.
+  // Conservative implementation: pairs of 1,3,5,7,9 in SA plus extra pair of 1s in SB and SC.
   {
-    id: "sp_odds_pairs_kong",
-    name: "Singles & Pairs: 11 33 55 77 99 9999",
+    id: "sp_odds_pairs_like_pair",
+    name: "Singles & Pairs: 11 33 55 77 99 11 11",
     section: "singles_pairs",
     difficulty: "hard",
     value: 50,
     closed: true,
-    description: "11 33 55 77 99 9999 — any 2 suits, pairs of odds in one suit + kong of 9s in other",
-    suitMode: "2suits",
+    description: "11 33 55 77 99 11 11 — any 3 suits, pairs of odd numbers with a like pair in opposite suits",
+    suitMode: "3suits",
     valMode: { kind: "fixed" },
     groups: [
       { suit: "SA", val: 1 as SuitedVal, count: 2, jokerLocked: true },
@@ -1418,7 +1518,8 @@ export const PATTERNS: HandPatternTemplate[] = [
       { suit: "SA", val: 5 as SuitedVal, count: 2, jokerLocked: true },
       { suit: "SA", val: 7 as SuitedVal, count: 2, jokerLocked: true },
       { suit: "SA", val: 9 as SuitedVal, count: 2, jokerLocked: true },
-      { suit: "SB", val: 9 as SuitedVal, count: 4, jokerLocked: true },
+      { suit: "SB", val: 1 as SuitedVal, count: 2, jokerLocked: true },
+      { suit: "SC", val: 1 as SuitedVal, count: 2, jokerLocked: true },
     ],
   },
 
