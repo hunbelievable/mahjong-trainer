@@ -25,6 +25,13 @@ function PatternTiles({ pattern }: { pattern: HandPattern }) {
 }
 
 function ShantenBadge({ shanten }: { shanten: number }) {
+  if (!Number.isFinite(shanten)) {
+    return (
+      <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700 border border-red-200">
+        Dead hand
+      </span>
+    );
+  }
   if (shanten === -1) {
     return (
       <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-500 text-white">

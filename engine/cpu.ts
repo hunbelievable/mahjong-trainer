@@ -58,12 +58,12 @@ function randomItem<T>(arr: T[]): T {
 
 /**
  * Tiles the claimant must surrender from hand to complete a pung/kong/quint.
- * Naturals first, jokers fill any remaining slots. NMJL requires at least one
- * natural matching tile — returns null if the claim is not legal.
+ * Naturals first, jokers fill any remaining slots. The discarded tile itself
+ * counts as one matching tile, so jokers alone can cover the rest.
+ * Returns null if the claim is not legal (not enough naturals+jokers to fill).
  */
 function tilesToSurrender(hand: Tile[], discard: Tile, needed: number): Tile[] | null {
   const naturals = hand.filter(t => t.suit === discard.suit && t.val === discard.val).slice(0, needed);
-  if (naturals.length < 1) return null;
   const remaining = needed - naturals.length;
   if (remaining === 0) return naturals;
   const jokers = hand.filter(t => t.suit === "joker").slice(0, remaining);

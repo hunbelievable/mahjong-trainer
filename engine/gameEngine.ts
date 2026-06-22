@@ -140,6 +140,8 @@ export interface GameState {
   log: string[];              // human-readable event log for the UI
   charleston: CharlestonState | null;
   courtesy: CourtesyState | null;
+  /** The most recently drawn-from-the-wall tile (seat + tile ID). Reset on each new draw. */
+  lastDraw: { seat: PlayerId; tileId: string } | null;
 }
 
 // =============================================================================
@@ -242,13 +244,12 @@ function eligibleClaims(
   const matching = hand.filter(t => t.suit === discard.suit && t.val === discard.val).length;
   const jokers = hand.filter(t => t.suit === "joker").length;
 
-  // NMJL rule: to claim a discard for pung/kong/quint, you must have at least one
-  // *natural* matching tile in hand. Jokers may fill the remaining slots in the meld.
-  if (matching >= 1) {
-    if (matching + jokers >= 4) types.push("quint");
-    if (matching + jokers >= 3) types.push("kong");
-    if (matching + jokers >= 2) types.push("pung");
-  }
+  // NMJL rule: the discarded tile itself counts toward the meld, so a claim is
+  // legal whenever (naturals in hand) + (jokers in hand) cover the remaining slots.
+  // Jokers alone can fill the rest — no separate "must hold a natural" requirement.
+  if (matching + jokers >= 4) types.push("quint");
+  if (matching + jokers >= 3) types.push("kong");
+  if (matching + jokers >= 2) types.push("pung");
 
   return types;
 }
@@ -273,6 +274,7 @@ export function createGameState(): GameState {
     log: [],
     charleston: null,
     courtesy: null,
+    lastDraw: null,
   };
 }
 
@@ -382,39 +384,34 @@ export function gameReducer(
     }
 
     // ── STOP_CHARLESTON ───────────────────────────────────────────────────
-    // Human votes to stop. Only honored if all CPUs also voted to stop.
+    // Any single vote to skip ends the Second Charleston (common house rule).
     case "STOP_CHARLESTON": {
       if (state.pendingAction?.type !== "human_charleston_stop") return state;
-      const { cpuVotes } = state.pendingAction;
-      const allStop = SEAT_ORDER
-        .filter(s => s !== ctx.humanSeat)
-        .every(s => cpuVotes[s]);
+      return startCourtesyOrFinish(
+        addLog(state.log, `${ctx.humanSeat} votes to skip — Second Charleston ends.`),
+        state,
+        ctx,
+        /* hadSecond */ false
+      );
+    }
 
-      if (allStop) {
+    // ── BEGIN_SECOND_CHARLESTON ───────────────────────────────────────────
+    // Honored only if no CPU has already voted to skip. If any CPU wants to skip,
+    // the Second Charleston is canceled even when the human wants to play.
+    case "BEGIN_SECOND_CHARLESTON": {
+      if (state.pendingAction?.type !== "human_charleston_stop") return state;
+      const { cpuVotes } = state.pendingAction;
+      const cpuStopper = SEAT_ORDER
+        .filter(s => s !== ctx.humanSeat)
+        .find(s => cpuVotes[s]);
+      if (cpuStopper) {
         return startCourtesyOrFinish(
-          addLog(state.log, "All players agree — Second Charleston skipped."),
+          addLog(state.log, `${cpuStopper} votes to skip — Second Charleston ends.`),
           state,
           ctx,
           /* hadSecond */ false
         );
       }
-      // At least one CPU wants to play — begin Second Charleston anyway.
-      const dissenters = SEAT_ORDER.filter(s => s !== ctx.humanSeat && !cpuVotes[s]).join(", ");
-      let newState: GameState = {
-        ...state,
-        charleston: { ...state.charleston!, step: 3, staged: {} },
-        log: addLog(state.log, `${dissenters} want${dissenters.length === 1 ? "s" : ""} to play Second Charleston.`),
-      };
-      newState = cpuStageCharleston(newState, ctx, 3);
-      return {
-        ...newState,
-        pendingAction: { type: "human_charleston_pass", step: 3 },
-      };
-    }
-
-    // ── BEGIN_SECOND_CHARLESTON ───────────────────────────────────────────
-    case "BEGIN_SECOND_CHARLESTON": {
-      if (state.pendingAction?.type !== "human_charleston_stop") return state;
       let newState: GameState = {
         ...state,
         charleston: { ...state.charleston!, step: 3, staged: {} },
@@ -755,6 +752,7 @@ function finishCharleston(log: string[], state: GameState, ctx: EngineContext): 
     turnNumber: 0,
     log: addLog(log, "East draws to begin play."),
     pendingAction: ctx.humanSeat === "E" ? { type: "human_discard" } : null,
+    lastDraw: { seat: "E", tileId: drawn.id },
   };
 }
 
@@ -950,6 +948,7 @@ function advanceToNextDraw(
     turnNumber: state.turnNumber + 1,
     log,
     pendingAction: seat === ctx.humanSeat ? { type: "human_discard" } : null,
+    lastDraw: { seat, tileId: drawn.id },
   };
 
   return newState;

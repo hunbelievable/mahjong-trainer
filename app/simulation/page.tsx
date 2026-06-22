@@ -366,7 +366,7 @@ export default function SimulationPage() {
                 {isCharlestonStop && state.pendingAction?.type === "human_charleston_stop" && (() => {
                   const cpuVotes = state.pendingAction.cpuVotes;
                   const cpuSeats: PlayerId[] = (["S", "W", "N"] as PlayerId[]).filter(s => s !== humanSeat);
-                  const anyCpuPlays = cpuSeats.some(s => !cpuVotes[s]);
+                  const anyCpuSkips = cpuSeats.some(s => cpuVotes[s]);
                   return (
                     <div className="bg-amber-50 border border-amber-300 rounded-lg p-4 space-y-3">
                       <div className="text-sm font-semibold text-amber-800">
@@ -377,15 +377,15 @@ export default function SimulationPage() {
                         {cpuSeats.map(seat => (
                           <div key={seat} className="ml-2">
                             • {SEAT_LABELS[seat]}: {cpuVotes[seat]
-                              ? <span className="text-gray-600">wants to skip</span>
+                              ? <span className="text-rose-700 font-semibold">votes to skip</span>
                               : <span className="text-violet-700 font-semibold">wants to play</span>}
                           </div>
                         ))}
                       </div>
                       <div className="text-xs text-amber-700 italic">
-                        {anyCpuPlays
-                          ? "At least one opponent wants to play — Second Charleston will happen regardless of your vote, but record it for completeness."
-                          : "All opponents want to skip. Your vote decides: unanimous skip stops here, otherwise Second Charleston is played."}
+                        {anyCpuSkips
+                          ? "At least one opponent votes to skip — Second Charleston will end whether you play or not."
+                          : "All opponents want to play. Your vote decides: vote to skip and the Second Charleston ends."}
                       </div>
                       <div className="flex gap-2">
                         <button
@@ -634,6 +634,21 @@ export default function SimulationPage() {
                   </div>
                 )}
 
+                {/* Read-only hand reference — shown during the stop vote and courtesy propose
+                    screens so the player can see what they have while deciding. */}
+                {(isCharlestonStop || courtesyProposeAction) && (
+                  <div className="pt-3 border-t border-gray-100 space-y-1">
+                    <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                      Your hand
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {humanHand.map(tile => (
+                        <TileFace key={tile.id} suit={tile.suit} val={tile.val} size="sm" />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <div className="pt-2 border-t border-gray-100">
                   <div className="text-xs text-gray-400">{state.wall.length} tiles in wall</div>
                 </div>
@@ -770,6 +785,11 @@ export default function SimulationPage() {
                 <HandDisplay
                   tiles={humanHand}
                   suggestedDiscardIds={isHumanTurn && coachingEnabled ? simSuggestedDiscardIds : undefined}
+                  freshTileId={
+                    isHumanTurn && state.lastDraw?.seat === humanSeat
+                      ? state.lastDraw.tileId
+                      : undefined
+                  }
                   onTileClick={isHumanTurn ? (tile) => discard(tile.id) : undefined}
                   label=""
                 />

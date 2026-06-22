@@ -152,6 +152,38 @@ function liveCount(suit: Suit, val: TileVal, liveWall: Tile[]): number {
 }
 
 /**
+ * Count tiles of a given type that are still potentially reachable — meaning they
+ * could end up matched in someone's hand: still in the wall or held in any player's
+ * hand. Tiles that are discarded, exposed in a meld, or were swapped into a meld
+ * (joker_swapped) are unavailable. Used for pattern-reachability checks.
+ */
+function tilesReachable(suit: Suit, val: TileVal, wall: Tile[]): number {
+  return wall.filter(
+    (t) =>
+      t.suit === suit &&
+      t.val === val &&
+      (t.state === "in_wall" || t.state === "in_hand")
+  ).length;
+}
+
+/**
+ * Returns true if every group in this pattern can still be filled given what's
+ * already gone to discards or exposed melds. Naturals required from the live pool,
+ * plus jokers for any group that accepts them. Per-group check — does not model
+ * joker overcommit across groups (conservative; flags only obvious deaths).
+ */
+function isPatternReachable(pattern: HandPattern, wall: Tile[]): boolean {
+  const jokersReachable = tilesReachable("joker", "joker", wall);
+  for (const group of pattern.groups) {
+    const naturals = tilesReachable(group.suit, group.val, wall);
+    const canUseJokers = group.count >= 3 && !group.jokerLocked;
+    const max = canUseJokers ? naturals + jokersReachable : naturals;
+    if (max < group.count) return false;
+  }
+  return true;
+}
+
+/**
  * Enumerate all (suit, val) combinations present in the full tile set.
  * Used to iterate over possible draws without needing a full wall reference.
  */
@@ -203,6 +235,7 @@ export function computeWinProbability(
   liveWallSize: number
 ): number {
   if (shanten < 0) return 1;          // already won
+  if (!Number.isFinite(shanten)) return 0;
   if (liveWallSize <= 0) return 0;
   if (totalOuts <= 0) return 0;
 
@@ -244,11 +277,21 @@ export function evaluateHand(
   // Score hand against every concrete pattern
   const allMatches = concrete.map((p) => shantenForPattern(hand, p));
 
-  // Find best (lowest) shanten
-  const bestShanten = Math.min(...allMatches.map((m) => m.shanten));
+  // Exclude patterns whose required tiles are no longer reachable (enough copies
+  // discarded or exposed in opponents' melds). These show as shanten = Infinity
+  // so they sort to the bottom and are filtered out of bestPatterns.
+  for (const m of allMatches) {
+    if (!isPatternReachable(m.pattern, wall)) {
+      m.shanten = Number.POSITIVE_INFINITY;
+    }
+  }
+
+  // Find best (lowest) shanten among reachable patterns
+  const reachable = allMatches.filter((m) => Number.isFinite(m.shanten));
+  const bestShanten = reachable.length > 0 ? Math.min(...reachable.map((m) => m.shanten)) : Number.POSITIVE_INFINITY;
 
   // Collect all patterns at best shanten, ranked by tiles already matched
-  const bestPatterns = allMatches
+  const bestPatterns = reachable
     .filter((m) => m.shanten === bestShanten)
     .sort((a, b) => b.tilesMatched - a.tilesMatched);
 
@@ -258,7 +301,7 @@ export function evaluateHand(
   // Compute outs: tiles that would reduce shanten for at least one best pattern
   const outs: Out[] = [];
 
-  if (bestShanten >= 0) {
+  if (Number.isFinite(bestShanten) && bestShanten >= 0) {
     for (const { suit, val } of allTileTypes()) {
       // Build a test hand with one copy of this tile added
       const fakeTile: Tile = {
