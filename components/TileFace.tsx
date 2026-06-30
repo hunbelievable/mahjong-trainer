@@ -21,10 +21,19 @@ const BADGE_CLASSES: Record<TileFaceSize, string> = {
   lg: "text-[12px] top-0.5 left-1",
 };
 
-/** The little corner index — like the pip in the corner of a playing card. Cracks get a numeral, winds get the letter. */
+/** The little corner index — like the pip in the corner of a playing card. Every tile gets one. */
 function cornerIndex(suit: Suit, val: TileVal): { text: string; color: string } | null {
+  if (suit === "dots")   return { text: String(val), color: "text-blue-800" };
+  if (suit === "bams")   return { text: String(val), color: "text-green-700" };
   if (suit === "cracks") return { text: String(val), color: "text-red-700" };
   if (suit === "wind")   return { text: String(val), color: "text-blue-800" };
+  if (suit === "dragon") {
+    if (val === "red")   return { text: "R", color: "text-red-700" };
+    if (val === "green") return { text: "G", color: "text-green-700" };
+    if (val === "white") return null; // soap — leave it unbadged
+  }
+  if (suit === "flower") return { text: "F", color: "text-pink-600" };
+  if (suit === "joker")  return { text: "J", color: "text-purple-700" };
   return null;
 }
 

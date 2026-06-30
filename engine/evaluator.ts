@@ -152,30 +152,50 @@ function liveCount(suit: Suit, val: TileVal, liveWall: Tile[]): number {
 }
 
 /**
- * Count tiles of a given type that are still potentially reachable — meaning they
- * could end up matched in someone's hand: still in the wall or held in any player's
- * hand. Tiles that are discarded, exposed in a meld, or were swapped into a meld
- * (joker_swapped) are unavailable. Used for pattern-reachability checks.
+ * Count tiles of a given type that are still available to the hand being
+ * evaluated: tiles the player already holds (always available), plus tiles still
+ * in the wall or in any hand. Deduped by tile id so a caller that passes the hand
+ * inside `wall` (the UI does) is not double-counted. Tiles that are discarded,
+ * exposed in a meld, or swapped out of a meld (joker_swapped) are unavailable.
+ *
+ * NB: callers inside the engine (CPU, gameEngine, observe) pass only the live
+ * draw pile as `wall`, so the held hand MUST be counted here — otherwise a tile
+ * the player already holds looks unreachable once the wall runs out of copies.
  */
-function tilesReachable(suit: Suit, val: TileVal, wall: Tile[]): number {
-  return wall.filter(
-    (t) =>
+function tilesReachable(suit: Suit, val: TileVal, hand: Tile[], wall: Tile[]): number {
+  const counted = new Set<string>();
+  let n = 0;
+  for (const t of hand) {
+    if (t.suit === suit && t.val === val && !counted.has(t.id)) {
+      counted.add(t.id);
+      n++;
+    }
+  }
+  for (const t of wall) {
+    if (
       t.suit === suit &&
       t.val === val &&
-      (t.state === "in_wall" || t.state === "in_hand")
-  ).length;
+      (t.state === "in_wall" || t.state === "in_hand") &&
+      !counted.has(t.id)
+    ) {
+      counted.add(t.id);
+      n++;
+    }
+  }
+  return n;
 }
 
 /**
  * Returns true if every group in this pattern can still be filled given what's
- * already gone to discards or exposed melds. Naturals required from the live pool,
- * plus jokers for any group that accepts them. Per-group check — does not model
- * joker overcommit across groups (conservative; flags only obvious deaths).
+ * already gone to discards or exposed melds. Naturals required from the live pool
+ * plus the held hand, plus jokers for any group that accepts them. Per-group check
+ * — does not model joker overcommit across groups (conservative; flags only
+ * obvious deaths).
  */
-function isPatternReachable(pattern: HandPattern, wall: Tile[]): boolean {
-  const jokersReachable = tilesReachable("joker", "joker", wall);
+function isPatternReachable(pattern: HandPattern, hand: Tile[], wall: Tile[]): boolean {
+  const jokersReachable = tilesReachable("joker", "joker", hand, wall);
   for (const group of pattern.groups) {
-    const naturals = tilesReachable(group.suit, group.val, wall);
+    const naturals = tilesReachable(group.suit, group.val, hand, wall);
     const canUseJokers = group.count >= 3 && !group.jokerLocked;
     const max = canUseJokers ? naturals + jokersReachable : naturals;
     if (max < group.count) return false;
@@ -281,7 +301,7 @@ export function evaluateHand(
   // discarded or exposed in opponents' melds). These show as shanten = Infinity
   // so they sort to the bottom and are filtered out of bestPatterns.
   for (const m of allMatches) {
-    if (!isPatternReachable(m.pattern, wall)) {
+    if (!isPatternReachable(m.pattern, hand, wall)) {
       m.shanten = Number.POSITIVE_INFINITY;
     }
   }

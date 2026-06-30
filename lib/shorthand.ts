@@ -134,3 +134,48 @@ export function sortTiles(tiles: Tile[]): Tile[] {
     return tileValSortKey(a.suit, a.val) - tileValSortKey(b.suit, b.val);
   });
 }
+
+/**
+ * Find where a freshly-arrived tile should slot into an existing (possibly
+ * hand-arranged) row so it lands next to similar tiles:
+ *   - among same-suit tiles, before the first one with a higher value
+ *   - otherwise just after the last same-suit tile
+ *   - if the suit isn't present, at the correct suit boundary, else the end
+ */
+function similarityInsertIndex(arr: Tile[], t: Tile): number {
+  const tSuit = SUIT_SORT_ORDER[t.suit];
+  const tVal = tileValSortKey(t.suit, t.val);
+  let lastSameSuit = -1;
+  for (let i = 0; i < arr.length; i++) {
+    if (SUIT_SORT_ORDER[arr[i].suit] === tSuit) {
+      lastSameSuit = i;
+      if (tileValSortKey(arr[i].suit, arr[i].val) > tVal) return i;
+    }
+  }
+  if (lastSameSuit >= 0) return lastSameSuit + 1;
+  for (let i = 0; i < arr.length; i++) {
+    if (SUIT_SORT_ORDER[arr[i].suit] > tSuit) return i;
+  }
+  return arr.length;
+}
+
+/**
+ * Reconcile a saved custom arrangement (a list of tile IDs) with the live hand.
+ * Tiles still present keep their saved order; tiles no longer held drop out;
+ * newly-drawn tiles are auto-inserted next to similar tiles. Pure — returns a
+ * new array and never mutates inputs.
+ */
+export function applyCustomOrder(order: string[], hand: Tile[]): Tile[] {
+  const byId = new Map(hand.map(t => [t.id, t]));
+  const used = new Set<string>();
+  const result: Tile[] = [];
+  for (const id of order) {
+    const t = byId.get(id);
+    if (t) { result.push(t); used.add(id); }
+  }
+  for (const t of hand) {
+    if (used.has(t.id)) continue;
+    result.splice(similarityInsertIndex(result, t), 0, t);
+  }
+  return result;
+}

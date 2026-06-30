@@ -336,8 +336,10 @@ describe("evaluateHand", () => {
     expect(result.totalOuts).toBe(2);
   });
 
-  it("win probability is 0 when all outs are dead (not in wall)", () => {
-    // Hand is tenpai for like_ones, but the needed 1-dots are not in wall
+  it("flags a hand as dead when the only completing tile is gone (not in wall)", () => {
+    // Tenpai-shaped for like_ones, but every remaining 1-dots is gone from the
+    // wall. The pattern can never be completed, so it is reported as dead
+    // (shanten Infinity) rather than a 0% tenpai.
     const hand = buildHand([
       ["dots", 1], ["dots", 1], ["dots", 1],
       ["bams", 1], ["bams", 1], ["bams", 1], ["bams", 1],
@@ -351,7 +353,8 @@ describe("evaluateHand", () => {
     const wall = fakeWall(deadPadding);
 
     const result = evaluateHand(hand, wall, [LIKE_ONES_TEMPLATE]);
-    expect(result.shanten).toBe(0);
+    expect(Number.isFinite(result.shanten)).toBe(false); // dead hand
+    expect(result.bestPatterns).toHaveLength(0);
     expect(result.totalOuts).toBe(0);
     expect(result.winProbability).toBe(0);
   });
@@ -364,9 +367,11 @@ describe("evaluateHand", () => {
       ["cracks", 1], ["cracks", 1], ["cracks", 1], ["cracks", 1],
       ["wind", "E"], ["wind", "E"],
     ]);
-    const wall = fakeWall(Array.from({ length: 16 + 1 }, (_, i) =>
-      makeTile("dots", 5, i + 1)
-    ));
+    // The two missing 1-dots are still live in the wall, so like_ones is reachable.
+    const wall = fakeWall([
+      makeTile("dots", 1, 3), makeTile("dots", 1, 4),
+      ...Array.from({ length: 16 }, (_, i) => makeTile("dots", 5, i + 1)),
+    ]);
 
     const result = evaluateHand(hand, wall, [LIKE_ONES_TEMPLATE]);
     expect(result.shanten).toBe(1); // likeOnes is closer
@@ -401,9 +406,13 @@ describe("bestDiscard", () => {
     );
   }
 
-  it("throws if hand does not have exactly 14 tiles", () => {
+  it("handles a non-14-tile hand without throwing", () => {
+    // bestDiscard is tolerant of off-size hands (the UI calls it with 13- and
+    // 14-tile hands incl. exposed melds); it must not throw.
     const hand = buildHand([["dots", 1]]);
-    expect(() => bestDiscard(hand, fakeWall(), PATTERNS)).toThrow();
+    let options: ReturnType<typeof bestDiscard> | undefined;
+    expect(() => { options = bestDiscard(hand, fakeWall(), PATTERNS); }).not.toThrow();
+    expect(Array.isArray(options)).toBe(true);
   });
 
   it("returns 14 discard options for a 14-tile hand", () => {
@@ -430,7 +439,13 @@ describe("bestDiscard", () => {
     ]);
     hand[13] = makeTile("dots", 9, 1);
 
-    const options = bestDiscard(hand, fakeWall(), [LIKE_ONES_TEMPLATE]);
+    // E-winds must be live in the wall for the E-pair to be completable.
+    const wall = [
+      makeTile("wind", "E", 3), makeTile("wind", "E", 4),
+      ...Array.from({ length: 30 }, (_, i) => makeTile("dots", 5, i + 100)),
+    ].map(t => ({ ...t, state: "in_wall" as const, owner: null }));
+
+    const options = bestDiscard(hand, wall, [LIKE_ONES_TEMPLATE]);
     // Discarding 9-dots leaves 13 tiles: 4 dots + 4 bams + 4 cracks + 1 E-wind
     // → tenpai (shanten 0), waiting on E-wind to complete like_ones
     expect(options[0].result.shanten).toBe(0);

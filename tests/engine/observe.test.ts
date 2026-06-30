@@ -9,26 +9,67 @@ import { PATTERNS } from "@/engine/patterns";
 // Helpers — drives all 4 seats as CPU (no human involvement)
 // =============================================================================
 
+/**
+ * Drive a fully-CPU game from START_GAME to "finished". Seat E is the nominal
+ * "human" the reducer waits on, so the harness must answer every pendingAction —
+ * including the Charleston and courtesy-pass steps that precede play. For the
+ * Charleston we pass the first three non-joker tiles and decline the Second
+ * Charleston / courtesy passes (any single skip vote is enough), which is the
+ * shortest legal route into the playing phase.
+ */
 function runFullGame(ctx: EngineContext): GameState {
   let state = createGameState();
   state = gameReducer(state, { type: "START_GAME" }, ctx);
 
-  let maxTurns = 800;
-  while (state.phase === "playing" && maxTurns-- > 0) {
-    if (state.pendingAction === null) {
-      state = gameReducer(state, { type: "ADVANCE_CPU" }, ctx);
-    } else if (state.pendingAction.type === "human_discard") {
-      const hand = state.hands[ctx.humanSeat];
-      if (!hand?.length) break;
-      const strategy = ctx.strategies[ctx.humanSeat] ?? DIFFICULTY_PRESETS.intermediate;
-      const evalResult = evaluateHand(hand, state.wall, PATTERNS);
-      const choice = strategy.chooseDiscard(hand, evalResult, state.wall, PATTERNS);
-      state = gameReducer(state, { type: "HUMAN_DISCARD", tileId: choice.id }, ctx);
-    } else if (state.pendingAction.type === "claim_window") {
-      state = gameReducer(state, { type: "HUMAN_PASS" }, ctx);
+  const firstNonJokerIds = (count: number): string[] =>
+    state.hands[ctx.humanSeat]
+      .filter(t => t.suit !== "joker")
+      .slice(0, count)
+      .map(t => t.id);
+
+  let guard = 5000;
+  while (state.phase !== "finished" && guard-- > 0) {
+    const prev = state;
+    const pending = state.pendingAction;
+
+    if (pending === null) {
+      if (state.phase === "playing") {
+        state = gameReducer(state, { type: "ADVANCE_CPU" }, ctx);
+      } else {
+        break; // no pending action outside of play — nothing to drive
+      }
     } else {
-      break;
+      switch (pending.type) {
+        case "human_charleston_pass":
+          state = gameReducer(state, { type: "HUMAN_STAGE_CHARLESTON", tileIds: firstNonJokerIds(3) }, ctx);
+          break;
+        case "human_charleston_stop":
+          state = gameReducer(state, { type: "STOP_CHARLESTON" }, ctx);
+          break;
+        case "human_courtesy_propose":
+          state = gameReducer(state, { type: "HUMAN_COURTESY_RESPOND", count: 0 }, ctx);
+          break;
+        case "human_courtesy_select":
+          state = gameReducer(state, { type: "HUMAN_COURTESY_PASS", tileIds: firstNonJokerIds(pending.count) }, ctx);
+          break;
+        case "human_discard": {
+          const hand = state.hands[ctx.humanSeat];
+          if (!hand?.length) return state;
+          const strategy = ctx.strategies[ctx.humanSeat] ?? DIFFICULTY_PRESETS.intermediate;
+          const evalResult = evaluateHand(hand, state.wall, PATTERNS);
+          const choice = strategy.chooseDiscard(hand, evalResult, state.wall, PATTERNS);
+          state = gameReducer(state, { type: "HUMAN_DISCARD", tileId: choice.id }, ctx);
+          break;
+        }
+        case "claim_window":
+          state = gameReducer(state, { type: "HUMAN_PASS" }, ctx);
+          break;
+        default:
+          return state; // unknown pending action — stop rather than spin
+      }
     }
+
+    if (state === prev) break; // reducer rejected the action — avoid an infinite loop
   }
   return state;
 }

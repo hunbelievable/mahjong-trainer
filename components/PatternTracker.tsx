@@ -3,7 +3,7 @@
 import type { EvalResult } from "@/engine/evaluator";
 import type { Tile } from "@/engine/tiles";
 import type { PatternGroup } from "@/engine/patterns";
-import { tileLabel } from "@/lib/shorthand";
+import TileFace from "./TileFace";
 
 interface PatternTrackerProps {
   hand: Tile[];
@@ -44,29 +44,25 @@ function computeGroupProgress(hand: Tile[], groups: PatternGroup[]): GroupProgre
   });
 }
 
-function GroupDots({ natural, jokerFill, needed, total }: {
-  natural: number; jokerFill: number; needed: number; total: number;
-}) {
+/**
+ * Render one group's target tiles, styled by match state:
+ *   - natural matches → normal tile
+ *   - joker-filled slots → a joker tile
+ *   - still-needed slots → dimmed (ghosted) target tile
+ */
+function GroupTiles({ group, natural, jokerFill }: GroupProgress) {
   return (
-    <div className="flex gap-0.5 items-center">
-      {Array.from({ length: total }).map((_, i) => {
-        const isNatural = i < natural;
-        const isJoker   = i >= natural && i < natural + jokerFill;
-        const isEmpty   = i >= natural + jokerFill;
-        return (
-          <span
-            key={i}
-            className={`
-              inline-block w-3 h-3 rounded-full border
-              ${isNatural ? "bg-emerald-500 border-emerald-600" : ""}
-              ${isJoker   ? "bg-yellow-400 border-yellow-500"   : ""}
-              ${isEmpty   ? "bg-white border-gray-300"          : ""}
-            `}
-            title={isJoker ? "Joker" : isNatural ? "Matched" : "Needed"}
-          />
-        );
+    <span className="inline-flex gap-0.5 items-center">
+      {Array.from({ length: group.count }).map((_, i) => {
+        if (i < natural) {
+          return <TileFace key={i} suit={group.suit} val={group.val} size="xs" />;
+        }
+        if (i < natural + jokerFill) {
+          return <TileFace key={i} suit="joker" val="joker" size="xs" />;
+        }
+        return <TileFace key={i} suit={group.suit} val={group.val} size="xs" dimmed />;
       })}
-    </div>
+    </span>
   );
 }
 
@@ -79,88 +75,65 @@ export default function PatternTracker({ hand, evalResult }: PatternTrackerProps
     );
   }
 
-  // Show top 2 patterns at best shanten
-  const topPatterns = evalResult.bestPatterns.slice(0, 2);
+  const patterns = evalResult.bestPatterns;
+
+  if (patterns.length === 0) {
+    return (
+      <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-xs text-gray-400 italic">
+        No viable patterns for this hand.
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-lg border border-gray-200 bg-white divide-y divide-gray-100">
-      <div className="px-3 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">
-        Pattern Progress
+      <div className="flex items-center justify-between px-3 py-2">
+        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+          Viable Patterns
+        </span>
+        <div className="flex gap-3">
+          <span className="flex items-center gap-1 text-[10px] text-gray-400">
+            <span className="w-2.5 h-2.5 rounded-sm bg-stone-300 inline-block" /> Have
+          </span>
+          <span className="flex items-center gap-1 text-[10px] text-gray-400">
+            <span className="w-2.5 h-2.5 rounded-sm bg-purple-200 border border-purple-300 inline-block" /> Joker
+          </span>
+          <span className="flex items-center gap-1 text-[10px] text-gray-400">
+            <span className="w-2.5 h-2.5 rounded-sm bg-white border border-gray-300 opacity-40 inline-block" /> Needed
+          </span>
+        </div>
       </div>
 
-      {topPatterns.map((match, pi) => {
+      {patterns.map((match, pi) => {
         const progress = computeGroupProgress(hand, match.pattern.groups);
         const completedGroups = progress.filter(p => p.needed === 0).length;
         const totalGroups = progress.length;
 
         return (
-          <div key={match.pattern.id} className="p-3 space-y-2">
+          <div key={`${match.pattern.id}-${pi}`} className="p-3 space-y-2">
             {/* Pattern header */}
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold text-gray-800">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-sm font-semibold text-gray-800 truncate">
                   {match.pattern.name}
                 </span>
                 {pi === 0 && (
-                  <span className="text-xs px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-semibold">
+                  <span className="text-xs px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-semibold shrink-0">
                     Best
                   </span>
                 )}
               </div>
-              <span className="text-xs text-gray-500">
-                {completedGroups}/{totalGroups} groups
+              <span className="text-xs text-gray-500 shrink-0">
+                {match.tilesMatched}/14 · {completedGroups}/{totalGroups} groups
               </span>
             </div>
 
-            {/* Group rows */}
-            <div className="space-y-1.5">
-              {progress.map((p, gi) => {
-                const isComplete = p.needed === 0;
-                const isEmpty    = p.natural === 0 && p.jokerFill === 0;
-                const rowColor   = isComplete ? "text-emerald-700" : isEmpty ? "text-gray-400" : "text-yellow-700";
-
-                return (
-                  <div key={gi} className="flex items-center gap-2">
-                    {/* Group label */}
-                    <span className={`text-xs font-mono w-16 shrink-0 ${rowColor}`}>
-                      {p.group.count}× {tileLabel(p.group.suit, p.group.val)}
-                      {p.group.jokerLocked ? " 🔒" : ""}
-                    </span>
-
-                    {/* Progress dots */}
-                    <GroupDots
-                      natural={p.natural}
-                      jokerFill={p.jokerFill}
-                      needed={p.needed}
-                      total={p.group.count}
-                    />
-
-                    {/* Status */}
-                    <span className={`text-xs ml-auto shrink-0 ${rowColor}`}>
-                      {isComplete
-                        ? "✓"
-                        : `${p.needed} more`
-                      }
-                    </span>
-                  </div>
-                );
-              })}
+            {/* Target tiles, styled by match state */}
+            <div className="flex flex-wrap gap-1.5 items-center">
+              {progress.map((p, gi) => (
+                <GroupTiles key={gi} {...p} />
+              ))}
             </div>
-
-            {/* Legend (only on first pattern) */}
-            {pi === 0 && (
-              <div className="flex gap-3 pt-1 border-t border-gray-50">
-                <div className="flex items-center gap-1 text-xs text-gray-400">
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block" /> Natural
-                </div>
-                <div className="flex items-center gap-1 text-xs text-gray-400">
-                  <span className="w-2.5 h-2.5 rounded-full bg-yellow-400 inline-block" /> Joker
-                </div>
-                <div className="flex items-center gap-1 text-xs text-gray-400">
-                  <span className="w-2.5 h-2.5 rounded-full bg-white border border-gray-300 inline-block" /> Needed
-                </div>
-              </div>
-            )}
           </div>
         );
       })}

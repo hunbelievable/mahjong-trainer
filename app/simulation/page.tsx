@@ -2,13 +2,14 @@
 
 import { useState, useMemo, useEffect, useRef } from "react";
 import type { GameState } from "@/engine/gameEngine";
-import { CHARLESTON_STEPS, findJokerSwaps } from "@/engine/gameEngine";
+import { CHARLESTON_STEPS, PASSES_TO, findJokerSwaps } from "@/engine/gameEngine";
 import { useSimulation } from "@/lib/useSimulation";
 import { evaluateHand, bestDiscard } from "@/engine/evaluator";
-import { sortTiles } from "@/lib/shorthand";
+import { sortTiles, applyCustomOrder } from "@/lib/shorthand";
 import type { DifficultyLevel, ClaimType } from "@/engine/cpu";
 import { greedyStrategy, chooseTilesForCharleston } from "@/engine/cpu";
 import type { PlayerId } from "@/engine/tiles";
+import { SEAT_ORDER } from "@/engine/tiles";
 import HandDisplay from "@/components/HandDisplay";
 import EvalPanel from "@/components/EvalPanel";
 import DiscardBoard from "@/components/DiscardBoard";
@@ -32,12 +33,19 @@ const CLAIM_LABELS: Record<ClaimType, string> = {
 
 export default function SimulationPage() {
   const [cpuDifficulty, setCpuDifficulty] = useState<Partial<Record<PlayerId, DifficultyLevel>>>({
+    E: "intermediate",
     S: "intermediate",
     W: "intermediate",
     N: "intermediate",
   });
+  /** Which seat the human plays. Chosen on the setup screen; East deals/acts first regardless. */
+  const [selectedSeat, setSelectedSeat] = useState<PlayerId>("E");
 
   const [sorted, setSorted] = useState(true);
+  /** When on, hand tiles can be dragged to rearrange and discarding is disabled. */
+  const [reorderMode, setReorderMode] = useState(false);
+  /** User's manual tile arrangement (tile IDs). null = no custom arrangement. */
+  const [customOrder, setCustomOrder] = useState<string[] | null>(null);
   const [coachingEnabled, setCoachingEnabled] = useState(true);
   const [charlestonSelection, setCharlestonSelection] = useState<Set<string>>(new Set());
   /** Tile IDs from the most-recent received pass that the human is passing blind. */
@@ -50,18 +58,47 @@ export default function SimulationPage() {
   const { state, startGame, discard, claim, pass, reset,
           stageCharleston, stopCharleston, beginSecondCharleston,
           respondCourtesy, passCourtesy, swapJoker, humanSeat } = useSimulation({
-    humanSeat: "E",
+    humanSeat: selectedSeat,
     cpuDifficulty,
     cpuDelayMs: 500,
   });
 
   const { saveMove, finishGame } = useGameSession({ mode: "simulation" });
 
+  /** The three CPU seats — everyone except the human, in seat order. */
+  const cpuSeats = useMemo(() => SEAT_ORDER.filter(s => s !== humanSeat), [humanSeat]);
+
   const rawHand = state.hands[humanSeat] ?? [];
+  const handIdsKey = rawHand.map(t => t.id).join(",");
   const humanHand = useMemo(
-    () => sorted ? sortTiles(rawHand) : rawHand,
-    [rawHand, sorted]
+    () => {
+      if (customOrder) return applyCustomOrder(customOrder, rawHand);
+      return sorted ? sortTiles(rawHand) : rawHand;
+    },
+    // handIdsKey captures membership changes; rawHand ref is stable between them
+    [handIdsKey, sorted, customOrder] // eslint-disable-line react-hooks/exhaustive-deps
   );
+
+  // Keep the custom arrangement reconciled as the hand changes (draws/discards).
+  useEffect(() => {
+    if (!customOrder) return;
+    const reconciled = applyCustomOrder(customOrder, rawHand).map(t => t.id);
+    if (
+      reconciled.length !== customOrder.length ||
+      reconciled.some((id, i) => id !== customOrder[i])
+    ) {
+      setCustomOrder(reconciled);
+    }
+  }, [handIdsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const enterReorder = () => {
+    setCustomOrder(humanHand.map(t => t.id));
+    setReorderMode(true);
+  };
+  const resetOrder = () => {
+    setCustomOrder(null);
+    setReorderMode(false);
+  };
 
   const evalWall = useMemo(() => Array.from(
     (() => {
@@ -235,7 +272,7 @@ export default function SimulationPage() {
           </span>
         </div>
         <div className="flex items-center gap-3">
-          <span className="text-xs text-gray-500">You: <strong>East</strong></span>
+          <span className="text-xs text-gray-500">You: <strong>{SEAT_LABELS[humanSeat]}</strong></span>
           <span className="text-xs text-gray-500">Turn {state.turnNumber}</span>
           <button
             onClick={() => setCoachingEnabled(c => !c)}
@@ -264,9 +301,33 @@ export default function SimulationPage() {
           <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-5">
             <h2 className="text-base font-bold text-gray-800">Set up game</h2>
 
+            {/* Seat selector */}
+            <div className="space-y-2">
+              <span className="text-sm font-semibold text-gray-700">Your seat</span>
+              <div className="flex gap-2">
+                {SEAT_ORDER.map(seat => (
+                  <button
+                    key={seat}
+                    onClick={() => setSelectedSeat(seat)}
+                    className={`
+                      px-3 py-1 text-xs rounded-full font-semibold transition-colors
+                      ${selectedSeat === seat
+                        ? "bg-violet-600 text-white"
+                        : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                      }
+                    `}
+                  >
+                    {SEAT_LABELS[seat]}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-gray-400">East deals and plays first regardless of your seat.</p>
+            </div>
+
             {/* CPU difficulty selectors */}
             <div className="space-y-3">
-              {(["S", "W", "N"] as PlayerId[]).map(seat => (
+              <span className="text-sm font-semibold text-gray-700">Opponent difficulty</span>
+              {cpuSeats.map(seat => (
                 <div key={seat} className="flex items-center gap-3">
                   <span className="text-sm text-gray-600 w-20">{SEAT_LABELS[seat]}</span>
                   <div className="flex gap-2">
@@ -334,13 +395,8 @@ export default function SimulationPage() {
           const dirLabel = stepInfo?.label ?? "";
           const charlNum = stepInfo?.charleston ?? 1;
 
-          // "You are passing to..." from East's perspective
-          const EAST_PASSES_TO: Record<"right" | "across" | "left", string> = {
-            right: "South",
-            across: "West",
-            left: "North",
-          };
-          const passingTo = EAST_PASSES_TO[stepInfo?.direction ?? "right"];
+          // Recipient of this pass, relative to the human's seat.
+          const passingTo = SEAT_LABELS[PASSES_TO[stepInfo?.direction ?? "right"][humanSeat]];
 
           return (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
@@ -365,7 +421,6 @@ export default function SimulationPage() {
                 {/* Stop / Continue vote */}
                 {isCharlestonStop && state.pendingAction?.type === "human_charleston_stop" && (() => {
                   const cpuVotes = state.pendingAction.cpuVotes;
-                  const cpuSeats: PlayerId[] = (["S", "W", "N"] as PlayerId[]).filter(s => s !== humanSeat);
                   const anyCpuSkips = cpuSeats.some(s => cpuVotes[s]);
                   return (
                     <div className="bg-amber-50 border border-amber-300 rounded-lg p-4 space-y-3">
@@ -709,27 +764,62 @@ export default function SimulationPage() {
                 <div className="flex items-center justify-between">
                   <h2 className="text-sm font-bold text-gray-700 uppercase tracking-wide">Your Hand</h2>
                   <div className="flex items-center gap-3">
-                    {/* Sort toggle */}
-                    <button
-                      onClick={() => setSorted(s => !s)}
-                      className={`text-xs px-2 py-0.5 rounded border transition-colors ${
-                        sorted
-                          ? "bg-indigo-100 text-indigo-700 border-indigo-300"
-                          : "bg-gray-100 text-gray-500 border-gray-300"
-                      }`}
-                      title={sorted ? "Showing sorted — click for deal order" : "Showing deal order — click to sort"}
-                    >
-                      {sorted ? "Sorted" : "Deal order"}
-                    </button>
-                    {isHumanTurn && (
-                      <span className="text-xs text-indigo-600 font-semibold animate-pulse">
-                        Your turn — click to discard
-                      </span>
-                    )}
-                    {!isHumanTurn && !claimWindow && state.phase === "playing" && (
-                      <span className="text-xs text-gray-400">
-                        {SEAT_LABELS[state.currentSeat]}&apos;s turn…
-                      </span>
+                    {reorderMode ? (
+                      <>
+                        <span className="text-xs px-2 py-0.5 rounded border bg-amber-100 text-amber-800 border-amber-300 font-semibold">
+                          Reorder mode — drag tiles, discarding off
+                        </span>
+                        <button
+                          onClick={() => setReorderMode(false)}
+                          className="text-xs px-2 py-0.5 rounded border bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700 transition-colors"
+                          title="Finish reordering and re-enable discarding"
+                        >
+                          Done
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        {/* Order toggle */}
+                        {customOrder ? (
+                          <button
+                            onClick={resetOrder}
+                            className="text-xs px-2 py-0.5 rounded border bg-emerald-100 text-emerald-700 border-emerald-300 transition-colors"
+                            title="Custom arrangement — click to reset to sorted"
+                          >
+                            Custom ✕
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => setSorted(s => !s)}
+                            className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+                              sorted
+                                ? "bg-indigo-100 text-indigo-700 border-indigo-300"
+                                : "bg-gray-100 text-gray-500 border-gray-300"
+                            }`}
+                            title={sorted ? "Showing sorted — click for deal order" : "Showing deal order — click to sort"}
+                          >
+                            {sorted ? "Sorted" : "Deal order"}
+                          </button>
+                        )}
+                        {/* Reorder toggle */}
+                        <button
+                          onClick={enterReorder}
+                          className="text-xs px-2 py-0.5 rounded border bg-gray-100 text-gray-600 border-gray-300 hover:bg-gray-200 transition-colors"
+                          title="Drag tiles to rearrange your hand"
+                        >
+                          Reorder
+                        </button>
+                        {isHumanTurn && (
+                          <span className="text-xs text-indigo-600 font-semibold animate-pulse">
+                            Your turn — click to discard
+                          </span>
+                        )}
+                        {!isHumanTurn && !claimWindow && state.phase === "playing" && (
+                          <span className="text-xs text-gray-400">
+                            {SEAT_LABELS[state.currentSeat]}&apos;s turn…
+                          </span>
+                        )}
+                      </>
                     )}
                   </div>
                 </div>
@@ -784,13 +874,15 @@ export default function SimulationPage() {
 
                 <HandDisplay
                   tiles={humanHand}
-                  suggestedDiscardIds={isHumanTurn && coachingEnabled ? simSuggestedDiscardIds : undefined}
+                  reorderable={reorderMode}
+                  onReorder={setCustomOrder}
+                  suggestedDiscardIds={!reorderMode && isHumanTurn && coachingEnabled ? simSuggestedDiscardIds : undefined}
                   freshTileId={
-                    isHumanTurn && state.lastDraw?.seat === humanSeat
+                    !reorderMode && isHumanTurn && state.lastDraw?.seat === humanSeat
                       ? state.lastDraw.tileId
                       : undefined
                   }
-                  onTileClick={isHumanTurn ? (tile) => discard(tile.id) : undefined}
+                  onTileClick={!reorderMode && isHumanTurn ? (tile) => discard(tile.id) : undefined}
                   label=""
                 />
 
@@ -821,10 +913,10 @@ export default function SimulationPage() {
               </div>
 
               {/* CPU meld summary */}
-              {(["S", "W", "N"] as PlayerId[]).some(s => state.melds[s]?.length > 0) && (
+              {cpuSeats.some(s => state.melds[s]?.length > 0) && (
                 <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-2">
                   <h2 className="text-sm font-bold text-gray-700 uppercase tracking-wide">CPU Exposed Melds</h2>
-                  {(["S", "W", "N"] as PlayerId[]).map(seat =>
+                  {cpuSeats.map(seat =>
                     state.melds[seat]?.length > 0 ? (
                       <div key={seat} className="flex items-start gap-2">
                         <span className="text-xs text-gray-500 w-16 shrink-0 pt-0.5">

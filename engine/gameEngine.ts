@@ -108,7 +108,7 @@ export const CHARLESTON_STEPS: Array<{
 ];
 
 // sender → recipient for each direction
-const PASSES_TO: Record<"right" | "across" | "left", Record<PlayerId, PlayerId>> = {
+export const PASSES_TO: Record<"right" | "across" | "left", Record<PlayerId, PlayerId>> = {
   right:  { E: "S", S: "W", W: "N", N: "E" },
   across: { E: "W", W: "E", S: "N", N: "S" },
   left:   { E: "N", N: "W", W: "S", S: "E" },

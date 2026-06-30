@@ -18,6 +18,7 @@ import TilePicker from "@/components/TilePicker";
 import HandDisplay from "@/components/HandDisplay";
 import DiscardBoard from "@/components/DiscardBoard";
 import EvalPanel from "@/components/EvalPanel";
+import PatternTracker from "@/components/PatternTracker";
 import TileFace from "@/components/TileFace";
 
 const SEATS: PlayerId[] = ["E", "S", "W", "N"];
@@ -337,6 +338,7 @@ export default function LivePage() {
           )}
 
           <EvalPanel result={evalResult} handSize={hand.length} />
+          <PatternTracker hand={hand} evalResult={evalResult} />
 
           {/* Shorthand reference */}
           <details className="text-xs text-gray-500">
