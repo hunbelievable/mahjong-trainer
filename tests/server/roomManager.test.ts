@@ -3,6 +3,21 @@ import { RoomManager } from "@/lib/server/roomManager";
 import type { EventLog } from "@/lib/server/eventLog";
 import type { RoomEvent } from "@/lib/server/gameRoom";
 
+/**
+ * Drive a just-started room through its Charleston (3 arbitrary non-joker
+ * tiles each step, then skip the Second Charleston) so tests that only care
+ * about play-phase behavior don't have to hand-roll this. Charleston pauses
+ * for a real human now (see lib/server/gameRoom.ts), so start() alone no
+ * longer reaches the playing phase.
+ */
+function driveCharlestonToPlay(mgr: RoomManager, id: string, userId: string): void {
+  for (let step = 0; step < 3; step++) {
+    const tiles = mgr.viewFor(id, userId)!.yourHand.filter((t) => t.suit !== "joker").slice(0, 3).map((t) => t.id);
+    mgr.submit(id, userId, { type: "HUMAN_STAGE_CHARLESTON", tileIds: tiles });
+  }
+  mgr.submit(id, userId, { type: "STOP_CHARLESTON" });
+}
+
 /** In-memory EventLog test double — proves RoomManager's persistence wiring without a live NATS server. */
 class FakeEventLog implements EventLog {
   appended: Array<{ roomId: string; event: RoomEvent }> = [];
@@ -80,6 +95,7 @@ describe("RoomManager — starting & play", () => {
     mgr.claimSeat(id, "E", "alice"); // East acts first
 
     expect(mgr.start(id)).toBe(true);
+    driveCharlestonToPlay(mgr, id, "alice");
     const room = mgr.getRoom(id)!;
     expect(mgr.statusOf(room)).toBe("playing");
     expect(room.game!.waitingOn).toBe("E");
@@ -98,6 +114,7 @@ describe("RoomManager — starting & play", () => {
     const { id } = mgr.createRoom();
     mgr.claimSeat(id, "E", "alice");
     mgr.start(id);
+    driveCharlestonToPlay(mgr, id, "alice");
 
     const tile = mgr.viewFor(id, "alice")!.yourHand.find((t) => t.suit !== "joker")!;
     // a user with no seat can't act
@@ -146,6 +163,7 @@ describe("RoomManager — event log persistence", () => {
     const { id } = mgr.createRoom();
     mgr.claimSeat(id, "E", "alice");
     mgr.start(id);
+    driveCharlestonToPlay(mgr, id, "alice");
     const afterStart = log.appended.length;
 
     const tile = mgr.viewFor(id, "alice")!.yourHand.find((t) => t.suit !== "joker")!;

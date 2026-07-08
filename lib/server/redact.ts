@@ -10,7 +10,7 @@
 // client. See docs/multiplayer-design.md §8 and §17.
 // =============================================================================
 
-import type { GameState, Meld, PendingAction, GamePhase } from "@/engine/gameEngine";
+import { findJokerSwaps, type GameState, type Meld, type PendingAction, type GamePhase, type JokerSwap } from "@/engine/gameEngine";
 import type { HandPattern } from "@/engine/patterns";
 import type { Tile, PlayerId } from "@/engine/tiles";
 import { SEAT_ORDER } from "@/engine/tiles";
@@ -34,6 +34,12 @@ export interface PlayerView {
   yourHand: Tile[];
   /** The viewer's own exposed melds. */
   yourMelds: Meld[];
+  /**
+   * Joker swaps available to the viewer right now. Every tile referenced is
+   * either from the viewer's own hand or an exposed (public) meld — safe to
+   * include as-is, no redaction needed on this field.
+   */
+  yourJokerSwaps: JokerSwap[];
 
   /** The other three seats, in seat order — counts + public melds only. */
   opponents: OpponentView[];
@@ -99,6 +105,7 @@ export function redactStateForSeat(state: GameState, you: PlayerId): PlayerView 
     currentSeat: state.currentSeat,
     yourHand: state.hands[you] ?? [],
     yourMelds: state.melds[you] ?? [],
+    yourJokerSwaps: findJokerSwaps(state, you),
     opponents,
     discardPile: state.discardPile,
     wallCount: state.wall.length,

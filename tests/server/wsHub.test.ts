@@ -60,9 +60,15 @@ describe("WsHub", () => {
     hub.broadcastRoom(id);
 
     expect(sock.messages).toHaveLength(2);
-    const latest = sock.messages[1] as { type: string; view: { yourHand: unknown[] } };
+    const latest = sock.messages[1] as { type: string; view: { phase: string; yourHand: unknown[] } };
     expect(latest.type).toBe("game");
-    expect(latest.view.yourHand).toHaveLength(14);
+    // start() now pauses at the Charleston (13-tile dealt hand) rather than
+    // driving straight to the human's first 14-tile discard turn — see
+    // lib/server/gameRoom.ts. The lobby→game push transition is what this
+    // test is really about; the 14-tile playing-phase case is covered by
+    // GameRoom's own "deals and drives to the human's first turn" test.
+    expect(latest.view.phase).toBe("charleston");
+    expect(latest.view.yourHand).toHaveLength(13);
   });
 
   it("never leaks another seat's concealed tiles to a connection's pushed view", () => {
@@ -77,7 +83,7 @@ describe("WsHub", () => {
     hub.connect(id, "alice", aliceSock);
 
     const view = (aliceSock.messages[0] as { view: { yourHand: Array<{ id: string }>; opponents: unknown[] } }).view;
-    expect(view.yourHand.length).toBe(14);
+    expect(view.yourHand.length).toBe(13); // dealt hand, mid-Charleston — see comment above
     // opponents present only as counts/melds — never a concealed hand
     for (const opp of view.opponents as Array<Record<string, unknown>>) {
       expect(opp).not.toHaveProperty("hand");

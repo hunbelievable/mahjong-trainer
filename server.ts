@@ -23,6 +23,9 @@ import { roomManager } from "./lib/server/roomManager";
 import { wsHub } from "./lib/server/wsHub";
 import { createEventLog } from "./lib/server/eventLog";
 import { handleRoomApi } from "./lib/server/roomApi";
+import type { GameAction } from "./engine/gameEngine";
+import type { PlayerId } from "./engine/tiles";
+import type { ClaimType } from "./engine/cpu";
 
 const dev = process.env.NODE_ENV !== "production";
 // For next({...})'s own self-referential URL construction ONLY — NOT the bind
@@ -91,8 +94,9 @@ app.prepare().then(async () => {
       close: (code, reason) => ws.close(code, reason),
     });
 
-    // MVP play surface: submit a discard. Lobby actions (claim seat, set CPU,
-    // start) go through app/api/rooms/[id]/actions — see that route.
+    // Play surface: Charleston pass/stop/begin-second, discard, claim/pass on
+    // a claim window, joker swap. Lobby
+    // actions (claim seat, set CPU, start) go through app/api/rooms/[id]/actions.
     ws.on("message", (raw) => {
       let msg: unknown;
       try {
@@ -100,20 +104,56 @@ app.prepare().then(async () => {
       } catch {
         return;
       }
-      if (
-        msg &&
-        typeof msg === "object" &&
-        (msg as Record<string, unknown>).type === "discard" &&
-        typeof (msg as Record<string, unknown>).tileId === "string"
-      ) {
-        const tileId = (msg as { tileId: string }).tileId;
-        const ok = roomManager.submit(roomId, userId, { type: "HUMAN_DISCARD", tileId });
-        if (ok) wsHub.broadcastRoom(roomId);
-        else ws.send(JSON.stringify({ type: "error", message: "illegal move" }));
-      }
+      const action = toGameAction(msg);
+      if (!action) return;
+
+      const ok = roomManager.submit(roomId, userId, action);
+      if (ok) wsHub.broadcastRoom(roomId);
+      else ws.send(JSON.stringify({ type: "error", message: "illegal move" }));
     });
 
     ws.on("close", unregister);
+  }
+
+  /** Validate + translate an incoming WS message into an engine GameAction, or null if malformed. */
+  function toGameAction(msg: unknown): GameAction | null {
+    if (!msg || typeof msg !== "object") return null;
+    const m = msg as Record<string, unknown>;
+
+    if (m.type === "discard" && typeof m.tileId === "string") {
+      return { type: "HUMAN_DISCARD", tileId: m.tileId };
+    }
+    if (m.type === "pass") {
+      return { type: "HUMAN_PASS" };
+    }
+    if (m.type === "claim" && typeof m.claimType === "string") {
+      return { type: "HUMAN_CLAIM", claimType: m.claimType as ClaimType };
+    }
+    if (m.type === "charlestonPass" && Array.isArray(m.tileIds) && m.tileIds.every((id) => typeof id === "string")) {
+      return { type: "HUMAN_STAGE_CHARLESTON", tileIds: m.tileIds as string[] };
+    }
+    if (m.type === "charlestonStop") {
+      return { type: "STOP_CHARLESTON" };
+    }
+    if (m.type === "charlestonBeginSecond") {
+      return { type: "BEGIN_SECOND_CHARLESTON" };
+    }
+    if (
+      m.type === "jokerSwap" &&
+      typeof m.meldOwnerSeat === "string" &&
+      typeof m.meldIndex === "number" &&
+      typeof m.jokerTileId === "string" &&
+      typeof m.handTileId === "string"
+    ) {
+      return {
+        type: "HUMAN_JOKER_SWAP",
+        meldOwnerSeat: m.meldOwnerSeat as PlayerId,
+        meldIndex: m.meldIndex,
+        jokerTileId: m.jokerTileId,
+        handTileId: m.handTileId,
+      };
+    }
+    return null;
   }
 
   server.listen(port, () => {
