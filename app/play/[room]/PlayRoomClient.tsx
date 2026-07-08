@@ -2,9 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import TileFace from "@/components/TileFace";
+import HandDisplay from "@/components/HandDisplay";
 import EvalPanel from "@/components/EvalPanel";
 import PatternTracker from "@/components/PatternTracker";
 import { evaluateHandFromView } from "@/lib/unseenPool";
+import { sortTiles, applyCustomOrder } from "@/lib/shorthand";
 import type { PlayerId } from "@/engine/tiles";
 import { SEAT_ORDER } from "@/engine/tiles";
 import { CHARLESTON_STEPS, PASSES_TO } from "@/engine/gameEngine";
@@ -450,6 +452,45 @@ function GamePanel({
   const claimWindow =
     view.pendingActionForYou?.type === "claim_window" ? view.pendingActionForYou : null;
 
+  const [sorted, setSorted] = useState(true);
+  /** When on, hand tiles can be dragged to rearrange and discarding is disabled. */
+  const [reorderMode, setReorderMode] = useState(false);
+  /** User's manual tile arrangement (tile IDs). null = no custom arrangement. */
+  const [customOrder, setCustomOrder] = useState<string[] | null>(null);
+
+  const rawHand = view.yourHand;
+  const handIdsKey = rawHand.map((t) => t.id).join(",");
+  const humanHand = useMemo(
+    () => {
+      if (customOrder) return applyCustomOrder(customOrder, rawHand);
+      return sorted ? sortTiles(rawHand) : rawHand;
+    },
+    // handIdsKey captures membership changes; rawHand ref is stable between them
+    [handIdsKey, sorted, customOrder], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  // Keep the custom arrangement reconciled as the hand changes (draws/discards).
+  useEffect(() => {
+    if (!customOrder) return;
+    const reconciled = applyCustomOrder(customOrder, rawHand).map((t) => t.id);
+    if (
+      reconciled.length !== customOrder.length ||
+      reconciled.some((id, i) => id !== customOrder[i])
+    ) {
+      setCustomOrder(reconciled);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handIdsKey]);
+
+  const enterReorder = () => {
+    setCustomOrder(humanHand.map((t) => t.id));
+    setReorderMode(true);
+  };
+  const resetOrder = () => {
+    setCustomOrder(null);
+    setReorderMode(false);
+  };
+
   const fullHandForEval = useMemo(
     () => [...view.yourHand, ...view.yourMelds.flatMap((m) => m.tiles)],
     [view.yourHand, view.yourMelds],
@@ -581,20 +622,77 @@ function GamePanel({
         )}
 
         {/* Your hand */}
-        <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-2">
-          <h2 className="text-sm font-bold text-gray-700 uppercase tracking-wide">
-            Your hand{canDiscard ? " — click a tile to discard" : ""}
-          </h2>
-          <div className="flex gap-1 flex-wrap min-h-12">
-            {view.yourHand.map((t) => (
-              <div
-                key={t.id}
-                className={t.id === view.yourFreshTileId ? "ring-2 ring-cyan-400 ring-offset-1 rounded-md p-0.5" : undefined}
-              >
-                <TileFace suit={t.suit} val={t.val} onClick={canDiscard ? () => onDiscard(t.id) : undefined} />
-              </div>
-            ))}
+        <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-bold text-gray-700 uppercase tracking-wide">Your Hand</h2>
+            <div className="flex items-center gap-3">
+              {reorderMode ? (
+                <>
+                  <span className="text-xs px-2 py-0.5 rounded border bg-amber-100 text-amber-800 border-amber-300 font-semibold">
+                    Reorder mode — drag tiles, discarding off
+                  </span>
+                  <button
+                    onClick={() => setReorderMode(false)}
+                    className="text-xs px-2 py-0.5 rounded border bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700 transition-colors"
+                    title="Finish reordering and re-enable discarding"
+                  >
+                    Done
+                  </button>
+                </>
+              ) : (
+                <>
+                  {/* Order toggle */}
+                  {customOrder ? (
+                    <button
+                      onClick={resetOrder}
+                      className="text-xs px-2 py-0.5 rounded border bg-emerald-100 text-emerald-700 border-emerald-300 transition-colors"
+                      title="Custom arrangement — click to reset to sorted"
+                    >
+                      Custom ✕
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => setSorted((s) => !s)}
+                      className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+                        sorted
+                          ? "bg-indigo-100 text-indigo-700 border-indigo-300"
+                          : "bg-gray-100 text-gray-500 border-gray-300"
+                      }`}
+                      title={sorted ? "Showing sorted — click for deal order" : "Showing deal order — click to sort"}
+                    >
+                      {sorted ? "Sorted" : "Deal order"}
+                    </button>
+                  )}
+                  {/* Reorder toggle */}
+                  <button
+                    onClick={enterReorder}
+                    className="text-xs px-2 py-0.5 rounded border bg-gray-100 text-gray-600 border-gray-300 hover:bg-gray-200 transition-colors"
+                    title="Drag tiles to rearrange your hand"
+                  >
+                    Reorder
+                  </button>
+                  {canDiscard && (
+                    <span className="text-xs text-indigo-600 font-semibold animate-pulse">
+                      Your turn — click to discard
+                    </span>
+                  )}
+                  {!canDiscard && !claimWindow && view.phase === "playing" && (
+                    <span className="text-xs text-gray-400">{SEAT_LABELS[view.currentSeat]}&apos;s turn…</span>
+                  )}
+                </>
+              )}
+            </div>
           </div>
+
+          <HandDisplay
+            tiles={humanHand}
+            reorderable={reorderMode}
+            onReorder={setCustomOrder}
+            freshTileId={!reorderMode && canDiscard ? view.yourFreshTileId ?? undefined : undefined}
+            onTileClick={!reorderMode && canDiscard ? (tile) => onDiscard(tile.id) : undefined}
+            label=""
+          />
+
           {view.yourMelds.length > 0 && (
             <div className="flex gap-1 flex-wrap pt-2 border-t border-gray-100">
               {view.yourMelds.flatMap((m) => m.tiles).map((t) => (
