@@ -36,6 +36,13 @@ const MODES = [
     badge: "bg-rose-100 text-rose-700",
     description: "Browse the NMJL 2025 card — every winning hand with tile breakdowns and point values.",
   },
+  {
+    href: "/multiplayer",
+    label: "Multiplayer",
+    color: "bg-indigo-600 hover:bg-indigo-700",
+    badge: "bg-indigo-100 text-indigo-700",
+    description: "Play a real game with friends, each on their own browser — open seats fill with CPUs.",
+  },
 ];
 
 export default function Home() {

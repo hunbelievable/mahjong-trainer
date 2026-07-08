@@ -75,6 +75,7 @@ const likeOnes: HandPattern = {
     { suit: "wind",   val: "E", count: 2, jokerLocked: true },
   ],
   totalTiles: 14,
+  value: 25,
 };
 
 // Fallback concrete pattern for quint test — build one directly
@@ -90,6 +91,7 @@ const quint_sevens_concrete: HandPattern = {
     { suit: "dragon", val: "white", count: 3 },
   ],
   totalTiles: 14,
+  value: 30,
 };
 
 const dragonPower_concrete: HandPattern = {
@@ -104,6 +106,7 @@ const dragonPower_concrete: HandPattern = {
     { suit: "wind",   val: "N",     count: 2, jokerLocked: true },
   ],
   totalTiles: 14,
+  value: 30,
 };
 
 // =============================================================================

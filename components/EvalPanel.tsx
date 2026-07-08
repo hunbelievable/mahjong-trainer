@@ -83,6 +83,9 @@ export default function EvalPanel({ result, handSize }: EvalPanelProps) {
                   Best: <span className="font-semibold text-gray-700">
                     {bestPattern?.pattern.name ?? "—"}
                   </span>
+                  {bestPattern && (
+                    <span className="text-gray-400"> · {bestPattern.pattern.value} pts</span>
+                  )}
                 </span>
               )}
             </div>

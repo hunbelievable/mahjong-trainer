@@ -18,6 +18,8 @@ export interface HandPattern {
   difficulty: "starter" | "medium" | "hard";
   groups: PatternGroup[];
   totalTiles: number;
+  /** Point value from the card — carried through from the template for scoring. */
+  value: number;
 }
 
 // =============================================================================
@@ -219,6 +221,7 @@ export function instantiateTemplate(template: HandPatternTemplate): HandPattern[
             difficulty: template.difficulty,
             groups: concrete,
             totalTiles,
+            value: template.value,
           });
         }
         } // dragonIter

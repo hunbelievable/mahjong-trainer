@@ -9,9 +9,10 @@ const NAV_LINKS = [
   { href: "/live",       label: "Live"       },
   { href: "/simulation", label: "Simulation" },
   { href: "/observe",    label: "Observe"    },
-  { href: "/study",      label: "Study"      },
-  { href: "/stats",      label: "Stats"      },
-  { href: "/patterns",   label: "Patterns"   },
+  { href: "/study",       label: "Study"       },
+  { href: "/stats",       label: "Stats"       },
+  { href: "/patterns",    label: "Patterns"    },
+  { href: "/multiplayer", label: "Multiplayer" },
 ];
 
 export default function Nav() {

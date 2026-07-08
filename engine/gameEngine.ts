@@ -287,7 +287,17 @@ export function createGameState(): GameState {
  * can't be serialized). The hook passes them in on each dispatch.
  */
 export interface EngineContext {
+  /**
+   * The seat that drives the single-human flows (Charleston, courtesy, claim
+   * window). Kept for those paths; the play loop uses `humanSeats` below.
+   */
   humanSeat: PlayerId;
+  /**
+   * Every seat played by a human. The play loop (draw/discard/claim resolution)
+   * pauses on any of these and never auto-plays them as CPUs. Single-player /
+   * observe pass a one-element set; multiplayer passes the real set.
+   */
+  humanSeats: Set<PlayerId>;
   strategies: SeatStrategies;
   patterns: HandPatternTemplate[];
 }
@@ -485,10 +495,12 @@ export function gameReducer(
     // ── HUMAN_DISCARD ─────────────────────────────────────────────────────────
     case "HUMAN_DISCARD": {
       if (state.pendingAction?.type !== "human_discard") return state;
-      const tile = state.hands[ctx.humanSeat].find(t => t.id === action.tileId);
+      // The discarding seat is whoever's turn it is — supports multiple humans.
+      const seat = state.currentSeat;
+      const tile = state.hands[seat].find(t => t.id === action.tileId);
       if (!tile) return state;
 
-      return processDiscard(state, ctx, ctx.humanSeat, tile);
+      return processDiscard(state, ctx, seat, tile);
     }
 
     // ── HUMAN_JOKER_SWAP ───────────────────────────────────────────────────
@@ -543,7 +555,7 @@ export function gameReducer(
       if (state.pendingAction !== null) return state; // waiting for human
 
       const seat = state.currentSeat;
-      if (seat === ctx.humanSeat) return state; // not a CPU seat
+      if (ctx.humanSeats.has(seat)) return state; // not a CPU seat
 
       return runCpuTurn(state, ctx, seat);
     }
@@ -751,7 +763,7 @@ function finishCharleston(log: string[], state: GameState, ctx: EngineContext): 
     currentSeat: "E",
     turnNumber: 0,
     log: addLog(log, "East draws to begin play."),
-    pendingAction: ctx.humanSeat === "E" ? { type: "human_discard" } : null,
+    pendingAction: ctx.humanSeats.has("E") ? { type: "human_discard" } : null,
     lastDraw: { seat: "E", tileId: drawn.id },
   };
 }
@@ -834,7 +846,7 @@ function resolveCpuClaims(
   humanAlreadyPassed: PlayerId | null
 ): GameState {
   const cpuSeats = SEAT_ORDER.filter(
-    s => s !== discardedBy && s !== humanAlreadyPassed && s !== ctx.humanSeat
+    s => s !== discardedBy && s !== humanAlreadyPassed && !ctx.humanSeats.has(s)
   );
 
   // Check mahjong claims first across all CPUs
@@ -906,7 +918,7 @@ function processClaim(
   };
 
   // Claimant must now discard
-  if (claimant === ctx.humanSeat) {
+  if (ctx.humanSeats.has(claimant)) {
     return { ...newState, pendingAction: { type: "human_discard" } };
   }
 
@@ -947,7 +959,7 @@ function advanceToNextDraw(
     currentSeat: seat,
     turnNumber: state.turnNumber + 1,
     log,
-    pendingAction: seat === ctx.humanSeat ? { type: "human_discard" } : null,
+    pendingAction: ctx.humanSeats.has(seat) ? { type: "human_discard" } : null,
     lastDraw: { seat, tileId: drawn.id },
   };
 

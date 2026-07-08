@@ -76,6 +76,7 @@ function runFullGame(ctx: EngineContext): GameState {
 
 const baseCtx: EngineContext = {
   humanSeat: "E",
+  humanSeats: new Set(["E" as const]),
   strategies: {
     E: DIFFICULTY_PRESETS.intermediate,
     S: DIFFICULTY_PRESETS.intermediate,
@@ -147,6 +148,7 @@ describe("Observe mode — strategy mix", () => {
   it("runs cleanly with mixed difficulties", () => {
     const mixedCtx: EngineContext = {
       humanSeat: "E",
+      humanSeats: new Set(["E" as const]),
       strategies: {
         E: DIFFICULTY_PRESETS.advanced,
         S: DIFFICULTY_PRESETS.beginner,
@@ -162,6 +164,7 @@ describe("Observe mode — strategy mix", () => {
   it("runs cleanly with all beginners", () => {
     const ctx: EngineContext = {
       humanSeat: "E",
+      humanSeats: new Set(["E" as const]),
       strategies: {
         E: DIFFICULTY_PRESETS.beginner,
         S: DIFFICULTY_PRESETS.beginner,
@@ -177,6 +180,7 @@ describe("Observe mode — strategy mix", () => {
   it("runs cleanly with all advanced", () => {
     const ctx: EngineContext = {
       humanSeat: "E",
+      humanSeats: new Set(["E" as const]),
       strategies: {
         E: DIFFICULTY_PRESETS.advanced,
         S: DIFFICULTY_PRESETS.advanced,

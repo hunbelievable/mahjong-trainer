@@ -32,3 +32,11 @@ Thumbs.db
 
 # Docker
 *.log
+
+# Terraform (infra/proxmox) — state and tfvars contain secrets/host details.
+# .terraform.lock.hcl is intentionally NOT ignored — it should be committed.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example

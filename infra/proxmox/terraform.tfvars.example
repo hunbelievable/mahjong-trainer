@@ -1,0 +1,17 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored —
+# never commit real credentials.
+
+proxmox_api_url   = "https://proxmox.lan:8006/" # no /api2/json suffix
+proxmox_api_token = "terraform@pve!mahjong-dev=00000000-0000-0000-0000-000000000000"
+node_name         = "pve" # your Proxmox node name — check the UI's left-hand tree
+
+ssh_public_key = "ssh-ed25519 AAAA... you@yourlaptop"
+
+# Everything below has a working default — only override what you need.
+# hostname                 = "mahjong-dev"
+# cpu_cores                = 4
+# memory_mb                = 6144
+# disk_gb                  = 24
+# rootfs_datastore_id      = "local-lvm"   # or "local-zfs" if you're on ZFS
+# mac_address              = null          # set to pin a MAC before first boot
+# debian_template_version  = "12.12-1"

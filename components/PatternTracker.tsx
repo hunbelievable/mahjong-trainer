@@ -122,6 +122,9 @@ export default function PatternTracker({ hand, evalResult }: PatternTrackerProps
                     Best
                   </span>
                 )}
+                <span className="text-xs px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 font-semibold shrink-0">
+                  {match.pattern.value} pts
+                </span>
               </div>
               <span className="text-xs text-gray-500 shrink-0">
                 {match.tilesMatched}/14 · {completedGroups}/{totalGroups} groups

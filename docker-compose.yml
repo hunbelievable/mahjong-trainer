@@ -14,6 +14,20 @@ services:
       timeout: 5s
       retries: 5
 
+  nats:
+    image: nats:2-alpine
+    restart: unless-stopped
+    # -js enables JetStream (the durable action log); -sd sets its storage dir;
+    # -m exposes the monitoring endpoint used by the healthcheck below.
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    volumes:
+      - nats_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   migrate:
     build:
       context: .
@@ -32,10 +46,25 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      # Ordering only, not health-gated — NATS is optional durability (see
+      # lib/server/eventLog.ts). The app must still start fine if it's down.
+      nats:
+        condition: service_started
     environment:
       DATABASE_URL: postgresql://mahjong:${DB_PASSWORD:-mahjong_dev}@postgres:5432/mahjong_trainer
+      AUTH_SECRET: ${AUTH_SECRET}
+      AUTH_GOOGLE_ID: ${AUTH_GOOGLE_ID}
+      AUTH_GOOGLE_SECRET: ${AUTH_GOOGLE_SECRET}
+      # Auth.js only auto-trusts the incoming Host header on Vercel; every
+      # other deployment (including our custom server.ts) needs this set
+      # explicitly, or every request 500s with "UntrustedHost". Hardcoded
+      # (not ${...}-templated) since it's a fixed property of self-hosting,
+      # not something to configure per-environment.
+      AUTH_TRUST_HOST: "true"
+      NATS_URL: nats://nats:4222
     ports:
       - "3000:3000"
 
 volumes:
   postgres_data:
+  nats_data:

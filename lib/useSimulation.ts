@@ -43,6 +43,7 @@ export function useSimulation(options: SimulationOptions = {}) {
   function getCtx(): EngineContext {
     return {
       humanSeat,
+      humanSeats: new Set([humanSeat]),
       strategies: strategiesRef.current,
       patterns: PATTERNS,
     };

@@ -193,6 +193,7 @@ describe("gameEngine — full game simulation", () => {
   it("can run a complete 4-CPU game to conclusion without throwing", () => {
     const ctx = {
       humanSeat: "E" as const,
+      humanSeats: new Set(["E" as const]),
       strategies: {
         E: DIFFICULTY_PRESETS.intermediate,
         S: DIFFICULTY_PRESETS.intermediate,

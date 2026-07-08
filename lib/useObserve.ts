@@ -58,11 +58,12 @@ export function useObserve(options: ObserveOptions = {}) {
 
   // Use "Z" as a sentinel humanSeat so no seat is treated as human
   // The engine guard we added handles unknown humanSeat gracefully
-  const OBSERVER_SEAT = "E"; // doesn't matter — we'll auto-resolve all pending actions
+  const OBSERVER_SEAT: PlayerId = "E"; // doesn't matter — we'll auto-resolve all pending actions
 
   function getCtx(): EngineContext {
     return {
       humanSeat: OBSERVER_SEAT,
+      humanSeats: new Set([OBSERVER_SEAT]),
       strategies: strategiesRef.current,
       patterns: PATTERNS,
     };
