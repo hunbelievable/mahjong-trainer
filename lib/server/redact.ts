@@ -89,6 +89,14 @@ export interface PlayerView {
    * on top of it). Null until a match exists. See lib/server/match.ts.
    */
   match: MatchView | null;
+
+  /**
+   * Wind-labeled seat → display handle, for seats whose occupant set one.
+   * Populated by RoomManager.viewFor (needs the physical↔wind bridge this
+   * pure function doesn't have — see lib/server/match.ts). Empty until a
+   * match exists or for seats with no handle set.
+   */
+  handles: Partial<Record<PlayerId, string>>;
 }
 
 /**
@@ -154,6 +162,7 @@ export function redactStateForSeat(state: GameState, you: PlayerId): PlayerView 
     pendingActionForYou: pendingActionForSeat(state, you),
     charlestonWaitingOn: [],
     claimPendingCount: 0,
+    handles: {},
     turnNumber: state.turnNumber,
     winner: state.winner,
     winningPattern: state.winningPattern,

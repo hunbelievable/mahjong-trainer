@@ -24,7 +24,9 @@ export function parseCookie(cookieHeader: string | undefined | null, name: strin
 }
 
 /** Verifies an Access token and finds-or-creates the User row for its email. Null if the token is missing/invalid. */
-export async function resolveUserFromToken(token: string | null): Promise<{ id: string; email: string } | null> {
+export async function resolveUserFromToken(
+  token: string | null,
+): Promise<{ id: string; email: string; handle: string | null } | null> {
   if (!token) return null;
   const email = await verifyAccessJwt(token);
   if (!email) return null;
@@ -32,15 +34,25 @@ export async function resolveUserFromToken(token: string | null): Promise<{ id: 
     where: { email },
     update: {},
     create: { email },
-    select: { id: true, email: true },
+    select: { id: true, email: true, handle: true },
   });
+}
+
+function tokenFromRequest(req: IncomingMessage): string | null {
+  const headerValue = req.headers["cf-access-jwt-assertion"];
+  const headerToken = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+  return headerToken ?? parseCookie(req.headers.cookie, ACCESS_COOKIE_NAME);
+}
+
+/** Resolve the full user record from a raw request — for call sites that need more than just the id (e.g. claimSeat's handle). */
+export async function userFromRequest(
+  req: IncomingMessage,
+): Promise<{ id: string; email: string; handle: string | null } | null> {
+  return resolveUserFromToken(tokenFromRequest(req));
 }
 
 /** Convenience: resolve a userId directly from a raw request (WS upgrade or plain Node handler). */
 export async function userIdFromRequest(req: IncomingMessage): Promise<string | null> {
-  const headerValue = req.headers["cf-access-jwt-assertion"];
-  const headerToken = Array.isArray(headerValue) ? headerValue[0] : headerValue;
-  const token = headerToken ?? parseCookie(req.headers.cookie, ACCESS_COOKIE_NAME);
-  const user = await resolveUserFromToken(token ?? null);
+  const user = await userFromRequest(req);
   return user?.id ?? null;
 }

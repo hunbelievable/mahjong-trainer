@@ -72,9 +72,18 @@ describe("RoomManager — lobby", () => {
     const mgr = new RoomManager();
     const { id } = mgr.createRoom("creator");
     mgr.claimSeat(id, "E", "alice");
-    expect(mgr.setSeatCpu(id, "S", "advanced")).toBe(true);
+    expect(mgr.setSeatCpu(id, "creator", "S", "advanced")).toBe(true);
     expect(mgr.getRoom(id)!.seats.S).toEqual({ kind: "cpu", difficulty: "advanced" });
-    expect(mgr.setSeatCpu(id, "E", "beginner")).toBe(false); // can't overwrite a human
+    expect(mgr.setSeatCpu(id, "creator", "E", "beginner")).toBe(false); // can't overwrite a human
+  });
+
+  it("setSeatCpu is creator-only — a seated non-creator can't set CPU difficulty", () => {
+    const mgr = new RoomManager();
+    const { id } = mgr.createRoom("creator");
+    mgr.claimSeat(id, "E", "alice");
+    expect(mgr.setSeatCpu(id, "alice", "S", "advanced")).toBe(false);
+    expect(mgr.getRoom(id)!.seats.S).toEqual({ kind: "open" });
+    expect(mgr.setSeatCpu(id, "creator", "S", "advanced")).toBe(true);
   });
 
   it("reflects the lobby in lobbyView with isYou", () => {
@@ -89,13 +98,70 @@ describe("RoomManager — lobby", () => {
   });
 });
 
+describe("RoomManager — listOpenRooms", () => {
+  it("lists a freshly created room with all 4 seats open", () => {
+    const mgr = new RoomManager();
+    const { id } = mgr.createRoom("creator");
+    const rooms = mgr.listOpenRooms();
+    expect(rooms).toHaveLength(1);
+    expect(rooms[0]).toMatchObject({ roomId: id, seatsHuman: 0, seatsOpen: 4 });
+  });
+
+  it("reflects claimed seats without exposing who claimed them", () => {
+    const mgr = new RoomManager();
+    const { id } = mgr.createRoom("creator");
+    mgr.claimSeat(id, "E", "alice");
+    mgr.claimSeat(id, "S", "bob");
+    const room = mgr.listOpenRooms().find((r) => r.roomId === id)!;
+    expect(room).toMatchObject({ seatsHuman: 2, seatsOpen: 2 });
+    expect(room).not.toHaveProperty("createdByUserId");
+  });
+
+  it("excludes a room once every seat is taken (open or CPU) — nothing left to join", () => {
+    const mgr = new RoomManager();
+    const { id } = mgr.createRoom("creator");
+    mgr.claimSeat(id, "E", "alice");
+    mgr.setSeatCpu(id, "creator", "S", "beginner");
+    mgr.setSeatCpu(id, "creator", "W", "beginner");
+    mgr.setSeatCpu(id, "creator", "N", "beginner");
+    expect(mgr.listOpenRooms().some((r) => r.roomId === id)).toBe(false);
+  });
+
+  it("excludes a room once it has started", () => {
+    const mgr = new RoomManager();
+    const { id } = mgr.createRoom("creator");
+    mgr.claimSeat(id, "E", "alice");
+    mgr.start(id, "creator");
+    expect(mgr.listOpenRooms().some((r) => r.roomId === id)).toBe(false);
+  });
+
+  it("excludes a closed room", () => {
+    const mgr = new RoomManager();
+    const { id } = mgr.createRoom("creator");
+    mgr.closeRoom(id, "creator");
+    expect(mgr.listOpenRooms().some((r) => r.roomId === id)).toBe(false);
+  });
+
+  it("sorts newest-created first", () => {
+    const mgr = new RoomManager();
+    const { id: first } = mgr.createRoom("creator");
+    const { id: second } = mgr.createRoom("creator");
+    // Force distinct timestamps deterministically — real-clock createdAt
+    // values can tie within the same millisecond and make this test flaky.
+    mgr.getRoom(first)!.createdAt = 1000;
+    mgr.getRoom(second)!.createdAt = 2000;
+    const ids = mgr.listOpenRooms().map((r) => r.roomId);
+    expect(ids.indexOf(second)).toBeLessThan(ids.indexOf(first));
+  });
+});
+
 describe("RoomManager — starting & play", () => {
   it("fills open seats with CPUs and starts, seating the human", () => {
     const mgr = new RoomManager();
     const { id } = mgr.createRoom("creator");
     mgr.claimSeat(id, "E", "alice"); // East acts first
 
-    expect(mgr.start(id)).toBe(true);
+    expect(mgr.start(id, "creator")).toBe(true);
     driveCharlestonToPlay(mgr, id, "alice");
     const room = mgr.getRoom(id)!;
     expect(mgr.statusOf(room)).toBe("playing");
@@ -114,7 +180,7 @@ describe("RoomManager — starting & play", () => {
     const mgr = new RoomManager();
     const { id } = mgr.createRoom("creator");
     mgr.claimSeat(id, "E", "alice");
-    mgr.start(id);
+    mgr.start(id, "creator");
     driveCharlestonToPlay(mgr, id, "alice");
 
     const tile = mgr.viewFor(id, "alice")!.yourHand.find((t) => t.suit !== "joker")!;
@@ -128,10 +194,19 @@ describe("RoomManager — starting & play", () => {
     const mgr = new RoomManager();
     const { id } = mgr.createRoom("creator");
     mgr.claimSeat(id, "E", "alice");
-    mgr.start(id);
+    mgr.start(id, "creator");
     expect(mgr.claimSeat(id, "S", "bob")).toBe(false);
-    expect(mgr.setSeatCpu(id, "S", "beginner")).toBe(false);
-    expect(mgr.start(id)).toBe(false); // already started
+    expect(mgr.setSeatCpu(id, "creator", "S", "beginner")).toBe(false);
+    expect(mgr.start(id, "creator")).toBe(false); // already started
+  });
+
+  it("is creator-only — a seated non-creator can't start the game", () => {
+    const mgr = new RoomManager();
+    const { id } = mgr.createRoom("creator");
+    mgr.claimSeat(id, "E", "alice");
+    expect(mgr.start(id, "alice")).toBe(false);
+    expect(mgr.statusOf(mgr.getRoom(id)!)).toBe("lobby");
+    expect(mgr.start(id, "creator")).toBe(true);
   });
 });
 
@@ -140,7 +215,7 @@ describe("RoomManager — event log persistence", () => {
     const mgr = new RoomManager(); // matches every other test in this file
     const { id } = mgr.createRoom("creator");
     mgr.claimSeat(id, "E", "alice");
-    expect(mgr.start(id)).toBe(true); // must not throw
+    expect(mgr.start(id, "creator")).toBe(true); // must not throw
   });
 
   it("persists start()'s events to the injected event log", async () => {
@@ -148,7 +223,7 @@ describe("RoomManager — event log persistence", () => {
     const mgr = new RoomManager(log);
     const { id } = mgr.createRoom("creator");
     mgr.claimSeat(id, "E", "alice");
-    mgr.start(id);
+    mgr.start(id, "creator");
 
     expect(log.appended.length).toBeGreaterThan(0);
     expect(log.appended.every((a) => a.roomId === id)).toBe(true);
@@ -163,7 +238,7 @@ describe("RoomManager — event log persistence", () => {
     const mgr = new RoomManager(log);
     const { id } = mgr.createRoom("creator");
     mgr.claimSeat(id, "E", "alice");
-    mgr.start(id);
+    mgr.start(id, "creator");
     driveCharlestonToPlay(mgr, id, "alice");
     const afterStart = log.appended.length;
 
@@ -183,7 +258,7 @@ describe("RoomManager — event log persistence", () => {
 
     const { id } = mgr.createRoom("creator");
     mgr.claimSeat(id, "E", "alice");
-    mgr.start(id);
+    mgr.start(id, "creator");
 
     expect(log.appended.length).toBeGreaterThan(0);
   });
@@ -194,7 +269,7 @@ describe("RoomManager — match & rotation", () => {
     const mgr = new RoomManager();
     const { id } = mgr.createRoom("creator");
     mgr.claimSeat(id, "E", "alice");
-    mgr.start(id);
+    mgr.start(id, "creator");
     driveCharlestonToPlay(mgr, id, "alice");
 
     const match = mgr.viewFor(id, "alice")!.match!;
@@ -214,7 +289,7 @@ describe("RoomManager — match & rotation", () => {
     const mgr = new RoomManager();
     const { id } = mgr.createRoom("creator");
     mgr.claimSeat(id, "E", "alice");
-    mgr.start(id);
+    mgr.start(id, "creator");
     driveCharlestonToPlay(mgr, id, "alice");
 
     // Drive the human's seat (pass every claim window, discard otherwise) until the game ends.
@@ -255,7 +330,7 @@ describe("RoomManager — match & rotation", () => {
     const mgr = new RoomManager();
     const { id } = mgr.createRoom("creator");
     mgr.claimSeat(id, "E", "alice");
-    mgr.start(id);
+    mgr.start(id, "creator");
     driveCharlestonToPlay(mgr, id, "alice"); // now "playing", not finished
 
     expect(mgr.startNextGame(id, "alice")).toBe(false);
@@ -268,7 +343,7 @@ describe("RoomManager — kickSeat & forfeitSeat", () => {
     const mgr = new RoomManager();
     const { id } = mgr.createRoom("creator");
     mgr.claimSeat(id, "E", "alice");
-    mgr.start(id);
+    mgr.start(id, "creator");
     driveCharlestonToPlay(mgr, id, "alice");
 
     expect(mgr.kickSeat(id, "not-the-creator", "E")).toBe(false);
@@ -288,13 +363,13 @@ describe("RoomManager — kickSeat & forfeitSeat", () => {
     const mgr = new RoomManager();
     const { id } = mgr.createRoom("creator");
     mgr.claimSeat(id, "E", "alice");
-    mgr.start(id);
+    mgr.start(id, "creator");
     driveCharlestonToPlay(mgr, id, "alice");
 
     expect(mgr.kickSeat(id, "creator", "E")).toBe(true);
 
     const room = mgr.getRoom(id)!;
-    expect(room.seats.E).toEqual({ kind: "cpu", difficulty: "intermediate" });
+    expect(room.seats.E).toEqual({ kind: "cpu", difficulty: "beginner" });
     expect(mgr.viewFor(id, "alice")).toBeNull(); // alice no longer holds a seat
     // The game itself kept running (CPU took over) rather than getting stuck.
     expect(room.game!.phase === "playing" || room.game!.phase === "finished").toBe(true);
@@ -304,7 +379,7 @@ describe("RoomManager — kickSeat & forfeitSeat", () => {
     const mgr = new RoomManager();
     const { id } = mgr.createRoom("creator");
     mgr.claimSeat(id, "E", "alice");
-    mgr.start(id);
+    mgr.start(id, "creator");
     driveCharlestonToPlay(mgr, id, "alice");
 
     expect(mgr.forfeitSeat(id, "nobody")).toBe(false); // not seated at all
@@ -316,7 +391,7 @@ describe("RoomManager — kickSeat & forfeitSeat", () => {
     const mgr = new RoomManager();
     const { id } = mgr.createRoom("creator");
     mgr.claimSeat(id, "E", "alice");
-    mgr.start(id);
+    mgr.start(id, "creator");
     driveCharlestonToPlay(mgr, id, "alice");
     mgr.kickSeat(id, "creator", "E");
 
@@ -328,7 +403,47 @@ describe("RoomManager — kickSeat & forfeitSeat", () => {
     // seat config — this being CPU is what makes the kick "stick" for future
     // games in the match, not just the one it happened in.
     expect(room.match!.players.E.isCpu).toBe(true);
-    expect(room.match!.players.E.cpuDifficulty).toBe("intermediate");
+    expect(room.match!.players.E.cpuDifficulty).toBe("beginner"); // vacated (kicked) seats get an easier CPU than a never-claimed one
+  });
+
+  it("clears the handle when a seat is kicked to CPU", () => {
+    const mgr = new RoomManager();
+    const { id } = mgr.createRoom("creator");
+    mgr.claimSeat(id, "E", "alice", "Alice");
+    mgr.start(id, "creator");
+    driveCharlestonToPlay(mgr, id, "alice");
+
+    mgr.kickSeat(id, "creator", "E");
+    expect(mgr.getRoom(id)!.match!.players.E.handle).toBeNull();
+  });
+});
+
+describe("RoomManager — handles", () => {
+  it("carries a claimed seat's handle into the lobby view", () => {
+    const mgr = new RoomManager();
+    const { id } = mgr.createRoom("creator");
+    mgr.claimSeat(id, "E", "alice", "Alice");
+    const view = mgr.lobbyView(id, "bob")!;
+    expect(view.seats.find((s) => s.seat === "E")).toMatchObject({ handle: "Alice" });
+  });
+
+  it("omits handle entirely when the seat's occupant didn't set one", () => {
+    const mgr = new RoomManager();
+    const { id } = mgr.createRoom("creator");
+    mgr.claimSeat(id, "E", "alice"); // no handle passed
+    const view = mgr.lobbyView(id, "bob")!;
+    expect(view.seats.find((s) => s.seat === "E")).not.toHaveProperty("handle");
+  });
+
+  it("projects handles onto wind labels in the game view, and physical labels in match standings", () => {
+    const mgr = new RoomManager();
+    const { id } = mgr.createRoom("creator");
+    mgr.claimSeat(id, "E", "alice", "Alice"); // physical E is dealer for game 1 → wind E too
+    mgr.start(id, "creator");
+
+    const view = mgr.viewFor(id, "alice")!;
+    expect(view.handles.E).toBe("Alice"); // wind-keyed
+    expect(view.match!.players.find((p) => p.seat === "E")).toMatchObject({ handle: "Alice" }); // physical-keyed
   });
 });
 
@@ -355,7 +470,7 @@ describe("RoomManager — closeRoom", () => {
     const mgr = new RoomManager();
     const { id } = mgr.createRoom("creator");
     mgr.claimSeat(id, "E", "alice");
-    mgr.start(id);
+    mgr.start(id, "creator");
     driveCharlestonToPlay(mgr, id, "alice");
 
     expect(mgr.closeRoom(id, "creator")).toBe(true);
@@ -373,14 +488,14 @@ describe("RoomManager — closeRoom", () => {
     const mgr = new RoomManager();
     const { id } = mgr.createRoom("creator");
     mgr.claimSeat(id, "E", "alice");
-    mgr.start(id);
+    mgr.start(id, "creator");
     driveCharlestonToPlay(mgr, id, "alice");
     mgr.closeRoom(id, "creator");
 
     expect(mgr.claimSeat(id, "S", "bob")).toBe(false);
     expect(mgr.releaseSeat(id, "alice")).toBe(false);
-    expect(mgr.setSeatCpu(id, "S", "beginner")).toBe(false);
-    expect(mgr.start(id)).toBe(false);
+    expect(mgr.setSeatCpu(id, "creator", "S", "beginner")).toBe(false);
+    expect(mgr.start(id, "creator")).toBe(false);
     expect(mgr.startNextGame(id, "alice")).toBe(false);
     expect(mgr.forfeitSeat(id, "alice")).toBe(false);
     expect(mgr.kickSeat(id, "creator", "E")).toBe(false);
@@ -430,7 +545,7 @@ describe("RoomManager — chat", () => {
 
     expect(mgr.sendChatMessage(id, "alice", "ready when you are")).not.toBeNull();
 
-    mgr.start(id);
+    mgr.start(id, "creator");
     driveCharlestonToPlay(mgr, id, "alice");
     expect(mgr.sendChatMessage(id, "alice", "good draw")).not.toBeNull();
     expect(mgr.chatHistory(id)).toHaveLength(2);

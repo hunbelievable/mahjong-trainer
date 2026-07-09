@@ -40,6 +40,8 @@ export interface MatchView {
     kind: "human" | "cpu";
     isYou: boolean;
     difficulty?: DifficultyLevel;
+    /** The seat's display handle, if the occupant has set one — physical-seat-keyed (see roomManager.ts header comment). */
+    handle?: string;
     score: number;
   }>;
   history: MatchGameSummary[];

@@ -1,6 +1,8 @@
 import { currentUser } from "@/lib/server/currentUser";
 import CreateRoomForm from "./CreateRoomForm";
 import JoinRoomForm from "./JoinRoomForm";
+import OpenRoomsList from "./OpenRoomsList";
+import HandleForm from "./HandleForm";
 
 export default async function MultiplayerPage() {
   const user = await currentUser();
@@ -32,12 +34,25 @@ export default async function MultiplayerPage() {
             </div>
 
             <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-3">
+              <h2 className="text-sm font-bold text-gray-700 uppercase tracking-wide">Your handle</h2>
+              <p className="text-xs text-gray-500">
+                Shown at the table as e.g. &quot;West (Rusty)&quot;. Leave blank to just show the seat.
+              </p>
+              <HandleForm initialHandle={user.handle} />
+            </div>
+
+            <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-3">
               <h2 className="text-sm font-bold text-gray-700 uppercase tracking-wide">Create a room</h2>
               <CreateRoomForm />
             </div>
 
             <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-3">
-              <h2 className="text-sm font-bold text-gray-700 uppercase tracking-wide">Join a room</h2>
+              <h2 className="text-sm font-bold text-gray-700 uppercase tracking-wide">Open rooms</h2>
+              <OpenRoomsList />
+            </div>
+
+            <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-3">
+              <h2 className="text-sm font-bold text-gray-700 uppercase tracking-wide">Join by code</h2>
               <JoinRoomForm />
             </div>
           </div>

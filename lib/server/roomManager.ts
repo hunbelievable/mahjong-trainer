@@ -11,6 +11,14 @@
 // track the four FIXED PHYSICAL seats (who's actually sitting where, for the
 // whole match); GameRoom only ever knows wind labels E/S/W/N (always East-first).
 // `match.windAssignment` is the per-game bridge between them — see lib/server/match.ts.
+//
+// Handles: a human seat carries the claimer's display handle (captured once,
+// at claim/match-start time — later profile edits don't retroactively update
+// an already-seated display, matching this app's existing "sticky at the
+// moment of action" tradeoffs elsewhere). `room.seats`/`match.players` store
+// it physical-seat-keyed; `RoomManager.viewFor` additionally projects a
+// wind-keyed map onto PlayerView, since the live game only ever speaks wind
+// labels (see `PlayerView.handles`).
 // =============================================================================
 
 import type { PlayerId } from "@/engine/tiles";
@@ -34,7 +42,7 @@ import { persistMatchCreate, persistMatchGame, persistMatchPlayerScores, persist
 
 export type SeatState =
   | { kind: "open" }
-  | { kind: "human"; userId: string }
+  | { kind: "human"; userId: string; handle: string | null }
   | { kind: "cpu"; difficulty: DifficultyLevel };
 
 export type RoomStatus = "lobby" | "playing" | "finished" | "closed";
@@ -44,6 +52,7 @@ interface MatchPlayer {
   userId: string | null;
   isCpu: boolean;
   cpuDifficulty: DifficultyLevel | null;
+  handle: string | null;
   score: number;
 }
 
@@ -91,10 +100,26 @@ export interface LobbyView {
   yourSeat: PlayerId | null;
   /** Whether the requesting user created this room — gates the Kick control. */
   isRoomCreator: boolean;
-  seats: Array<{ seat: PlayerId; kind: SeatState["kind"]; isYou: boolean; difficulty?: DifficultyLevel }>;
+  seats: Array<{
+    seat: PlayerId;
+    kind: SeatState["kind"];
+    isYou: boolean;
+    difficulty?: DifficultyLevel;
+    handle?: string;
+  }>;
+}
+
+/** One row in the "join a room" browser — deliberately no creator identity, just enough to pick a room. */
+export interface OpenRoomSummary {
+  roomId: string;
+  createdAt: number;
+  seatsHuman: number;
+  seatsOpen: number;
 }
 
 const DEFAULT_CPU_DIFFICULTY: DifficultyLevel = "intermediate";
+/** A seat vacated mid-match (kicked or forfeited) hands off to an easier CPU than a never-claimed seat — the human who was there presumably wanted a real game, not to hand a strong bot the rest of it. */
+const VACATED_SEAT_CPU_DIFFICULTY: DifficultyLevel = "beginner";
 
 function openSeats(): Record<PlayerId, SeatState> {
   return { E: { kind: "open" }, S: { kind: "open" }, W: { kind: "open" }, N: { kind: "open" } };
@@ -191,12 +216,12 @@ export class RoomManager {
   }
 
   /** Claim an open seat. Fails if the room has started, the seat is taken, or the user already sits. */
-  claimSeat(id: string, seat: PlayerId, userId: string): boolean {
+  claimSeat(id: string, seat: PlayerId, userId: string, handle: string | null = null): boolean {
     const room = this.rooms.get(id);
     if (!room || this.statusOf(room) !== "lobby") return false;
     if (room.seats[seat].kind !== "open") return false;
     if (this.seatOf(room, userId) !== null) return false; // one seat per user
-    room.seats[seat] = { kind: "human", userId };
+    room.seats[seat] = { kind: "human", userId, handle };
     return true;
   }
 
@@ -210,27 +235,38 @@ export class RoomManager {
     return true;
   }
 
-  /** Set an open/CPU seat to a CPU of the given difficulty (lobby only, not a human seat). */
-  setSeatCpu(id: string, seat: PlayerId, difficulty: DifficultyLevel): boolean {
+  /**
+   * Set an open/CPU seat to a CPU of the given difficulty — creator-only
+   * (same authorization as start/kickSeat/closeRoom), lobby only, and can't
+   * overwrite a human seat.
+   */
+  setSeatCpu(id: string, requestingUserId: string, seat: PlayerId, difficulty: DifficultyLevel): boolean {
     const room = this.rooms.get(id);
     if (!room || this.statusOf(room) !== "lobby") return false;
+    if (room.createdByUserId !== requestingUserId) return false;
     if (room.seats[seat].kind === "human") return false;
     room.seats[seat] = { kind: "cpu", difficulty };
     return true;
   }
 
-  /** Fill every open seat with a CPU, create the match, and start the first game. Fails if not in the lobby. */
-  start(id: string): boolean {
+  /**
+   * Fill every open seat with a CPU, create the match, and start the first
+   * game. Creator-only (same authorization as kickSeat/closeRoom) — the room
+   * manager decides when the table is ready, not whoever happens to click
+   * first. Fails if not in the lobby.
+   */
+  start(id: string, userId: string): boolean {
     const room = this.rooms.get(id);
     if (!room || this.statusOf(room) !== "lobby") return false;
+    if (room.createdByUserId !== userId) return false;
 
     const dealerSeat: PlayerId = "E";
     const players = {} as Record<PlayerId, MatchPlayer>;
     for (const s of SEAT_ORDER) {
       const st = room.seats[s];
-      if (st.kind === "human") players[s] = { userId: st.userId, isCpu: false, cpuDifficulty: null, score: 0 };
-      else if (st.kind === "cpu") players[s] = { userId: null, isCpu: true, cpuDifficulty: st.difficulty, score: 0 };
-      else players[s] = { userId: null, isCpu: true, cpuDifficulty: DEFAULT_CPU_DIFFICULTY, score: 0 }; // open → CPU
+      if (st.kind === "human") players[s] = { userId: st.userId, isCpu: false, cpuDifficulty: null, handle: st.handle, score: 0 };
+      else if (st.kind === "cpu") players[s] = { userId: null, isCpu: true, cpuDifficulty: st.difficulty, handle: null, score: 0 };
+      else players[s] = { userId: null, isCpu: true, cpuDifficulty: DEFAULT_CPU_DIFFICULTY, handle: null, score: 0 }; // open → CPU
     }
 
     const matchId = crypto.randomUUID();
@@ -343,6 +379,7 @@ export class RoomManager {
           kind: p.isCpu ? "cpu" : "human",
           isYou: !p.isCpu && p.userId === userId,
           ...(p.isCpu ? { difficulty: p.cpuDifficulty ?? undefined } : {}),
+          ...(p.handle ? { handle: p.handle } : {}),
           score: p.score,
         };
       }),
@@ -380,8 +417,13 @@ export class RoomManager {
     if (!room.game.convertSeatToCpu(wind)) return false;
 
     const player = room.match.players[targetSeat];
-    room.match.players[targetSeat] = { ...player, isCpu: true, cpuDifficulty: "intermediate" };
-    room.seats[targetSeat] = { kind: "cpu", difficulty: "intermediate" };
+    room.match.players[targetSeat] = {
+      ...player,
+      isCpu: true,
+      cpuDifficulty: VACATED_SEAT_CPU_DIFFICULTY,
+      handle: null,
+    };
+    room.seats[targetSeat] = { kind: "cpu", difficulty: VACATED_SEAT_CPU_DIFFICULTY };
 
     this.persistNewEvents(room.id, room.game);
     this.maybeRecordGameResult(room);
@@ -413,7 +455,17 @@ export class RoomManager {
     if (!seat) return null;
     const wind = room.match.windAssignment[seat];
     const view = room.game.viewFor(wind);
-    return { ...view, match: this.matchView(room, userId) };
+    return { ...view, match: this.matchView(room, userId), handles: this.windKeyedHandles(room.match) };
+  }
+
+  /** Project each physical seat's handle onto its wind label for the current game — see the header comment. */
+  private windKeyedHandles(match: MatchState): Partial<Record<PlayerId, string>> {
+    const handles: Partial<Record<PlayerId, string>> = {};
+    for (const physical of SEAT_ORDER) {
+      const p = match.players[physical];
+      if (!p.isCpu && p.handle) handles[match.windAssignment[physical]] = p.handle;
+    }
+    return handles;
   }
 
   /** The lobby view for a user (safe to send: seat kinds + which one is theirs). */
@@ -433,9 +485,28 @@ export class RoomManager {
           kind: st.kind,
           isYou: st.kind === "human" && st.userId === userId,
           ...(st.kind === "cpu" ? { difficulty: st.difficulty } : {}),
+          ...(st.kind === "human" && st.handle ? { handle: st.handle } : {}),
         };
       }),
     };
+  }
+
+  /**
+   * Rooms a fresh visitor could actually join: still in the lobby (not
+   * started/finished/closed) with at least one open seat. Sorted newest
+   * first. No creator identity exposed — see OpenRoomSummary.
+   */
+  listOpenRooms(): OpenRoomSummary[] {
+    const result: OpenRoomSummary[] = [];
+    for (const room of Array.from(this.rooms.values())) {
+      if (this.statusOf(room) !== "lobby") continue;
+      const seats = Object.values(room.seats);
+      const seatsOpen = seats.filter((s) => s.kind === "open").length;
+      if (seatsOpen === 0) continue;
+      const seatsHuman = seats.filter((s) => s.kind === "human").length;
+      result.push({ roomId: room.id, createdAt: room.createdAt, seatsHuman, seatsOpen });
+    }
+    return result.sort((a, b) => b.createdAt - a.createdAt);
   }
 
   // ── Chat ───────────────────────────────────────────────────────────────────

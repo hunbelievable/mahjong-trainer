@@ -68,7 +68,8 @@ model HandPattern {
 model User {
   id           String        @id @default(cuid())
   email        String        @unique
-  name         String?
+  /// Multiplayer display handle, shown as "Seat (handle)" — null until the user sets one.
+  handle       String?
   createdAt    DateTime      @default(now())
   matchPlayers MatchPlayer[]
   createdRooms Room[]

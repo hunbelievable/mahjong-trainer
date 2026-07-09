@@ -77,6 +77,23 @@ describe("handleRoomApi", () => {
     expect(room).toBeDefined();
   });
 
+  it("GET /api/rooms lists a newly created room as open", async () => {
+    const createRes = await authedFetch("/api/rooms", { method: "POST" });
+    const { roomId } = await createRes.json();
+
+    const res = await authedFetch("/api/rooms");
+    expect(res.status).toBe(200);
+    const { rooms } = await res.json();
+    const room = rooms.find((r: { roomId: string }) => r.roomId === roomId);
+    expect(room).toMatchObject({ roomId, seatsHuman: 0, seatsOpen: 4 });
+  });
+
+  it("GET /api/rooms requires auth", async () => {
+    verify.mockResolvedValue(null);
+    const res = await authedFetch("/api/rooms");
+    expect(res.status).toBe(401);
+  });
+
   it("GET /api/rooms/:id returns the lobby view", async () => {
     const createRes = await authedFetch("/api/rooms", { method: "POST" });
     const { roomId } = await createRes.json();
@@ -106,6 +123,86 @@ describe("handleRoomApi", () => {
     const viewRes = await authedFetch(`/api/rooms/${roomId}`);
     const body = await viewRes.json();
     expect(body.view.yourSeat).toBe("E");
+  });
+
+  it("claimSeat carries the caller's current handle into the lobby view", async () => {
+    upsert.mockResolvedValue({ id: USER_ID, email: "alice@example.com", handle: "Alice" });
+    const createRes = await authedFetch("/api/rooms", { method: "POST" });
+    const { roomId } = await createRes.json();
+
+    await authedFetch(`/api/rooms/${roomId}/actions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "claimSeat", seat: "E" }),
+    });
+
+    const viewRes = await authedFetch(`/api/rooms/${roomId}`);
+    const body = await viewRes.json();
+    expect(body.view.seats.find((s: { seat: string }) => s.seat === "E")).toMatchObject({ handle: "Alice" });
+  });
+
+  it("start is creator-only — a seated non-creator gets 409, the creator succeeds", async () => {
+    // alice creates and seats herself
+    const createRes = await authedFetch("/api/rooms", { method: "POST" });
+    const { roomId } = await createRes.json();
+    await authedFetch(`/api/rooms/${roomId}/actions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "claimSeat", seat: "E" }),
+    });
+
+    // bob seats himself too, then tries to start — not the creator
+    verify.mockResolvedValue("bob@example.com");
+    upsert.mockResolvedValue({ id: "user-2", email: "bob@example.com" });
+    await authedFetch(`/api/rooms/${roomId}/actions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "claimSeat", seat: "S" }),
+    });
+    const bobStart = await authedFetch(`/api/rooms/${roomId}/actions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "start" }),
+    });
+    expect(bobStart.status).toBe(409);
+
+    // alice (the creator) can
+    verify.mockResolvedValue("alice@example.com");
+    upsert.mockResolvedValue({ id: USER_ID, email: "alice@example.com" });
+    const aliceStart = await authedFetch(`/api/rooms/${roomId}/actions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "start" }),
+    });
+    expect(aliceStart.status).toBe(200);
+  });
+
+  it("setCpu is creator-only — a seated non-creator gets 409, the creator succeeds", async () => {
+    const createRes = await authedFetch("/api/rooms", { method: "POST" });
+    const { roomId } = await createRes.json();
+    await authedFetch(`/api/rooms/${roomId}/actions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "claimSeat", seat: "E" }),
+    });
+
+    verify.mockResolvedValue("bob@example.com");
+    upsert.mockResolvedValue({ id: "user-2", email: "bob@example.com" });
+    const bobSetCpu = await authedFetch(`/api/rooms/${roomId}/actions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "setCpu", seat: "S", difficulty: "advanced" }),
+    });
+    expect(bobSetCpu.status).toBe(409);
+
+    verify.mockResolvedValue("alice@example.com");
+    upsert.mockResolvedValue({ id: USER_ID, email: "alice@example.com" });
+    const aliceSetCpu = await authedFetch(`/api/rooms/${roomId}/actions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "setCpu", seat: "S", difficulty: "advanced" }),
+    });
+    expect(aliceSetCpu.status).toBe(200);
   });
 
   it("rejects an unknown action with 400", async () => {

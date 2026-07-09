@@ -71,7 +71,9 @@ export class WsHub {
   private pushTo(roomId: string, conn: Connection): void {
     const room = this.manager.getRoom(roomId);
     if (!room) {
-      conn.socket.send(JSON.stringify({ type: "error", message: "room not found" }));
+      // Fatal: there's no view of this room to recover into — the client should
+      // show a terminal error, not keep displaying stale game/lobby state.
+      conn.socket.send(JSON.stringify({ type: "error", message: "room not found", fatal: true }));
       return;
     }
 
@@ -91,7 +93,7 @@ export class WsHub {
     if (!view) {
       // Game started (or already finished) and this connection never held a seat —
       // no spectators in MVP (see design doc P5). Tell them and drop the connection.
-      conn.socket.send(JSON.stringify({ type: "error", message: "not seated in this game" }));
+      conn.socket.send(JSON.stringify({ type: "error", message: "not seated in this game", fatal: true }));
       conn.socket.close(4001, "not seated");
       return;
     }

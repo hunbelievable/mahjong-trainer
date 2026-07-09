@@ -26,6 +26,7 @@ function baseView(overrides: Partial<PlayerView> = {}): PlayerView {
     pendingActionForYou: null,
     charlestonWaitingOn: [],
     claimPendingCount: 0,
+    handles: {},
     turnNumber: 5,
     winner: null,
     winningPattern: null,

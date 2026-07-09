@@ -18,6 +18,10 @@ import type { LobbyView, ChatMessage } from "@/lib/server/roomManager";
 import type { MatchView } from "@/lib/server/match";
 
 const SEAT_LABELS: Record<PlayerId, string> = { E: "East", S: "South", W: "West", N: "North" };
+/** "West" or, if that occupant set one, "West (Rusty)". `handle` may be undefined/null/absent — all mean "no handle". */
+function formatSeat(seat: PlayerId, handle?: string | null): string {
+  return handle ? `${SEAT_LABELS[seat]} (${handle})` : SEAT_LABELS[seat];
+}
 const DIFFICULTY_LABELS: Record<DifficultyLevel, string> = {
   beginner: "Beginner",
   intermediate: "Intermediate",
@@ -47,6 +51,11 @@ export default function PlayRoomClient({ roomId }: { roomId: string }) {
   // Chat runs alongside whatever the main lobby/game state is doing — never
   // reset by phase transitions, and never persisted server-side.
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  // A rejected action (stale UI, clicked something no longer legal) is a
+  // transient notice, not a broken connection — it must never replace the
+  // game view the way a fatal error does. Auto-clears after a few seconds.
+  const [transientError, setTransientError] = useState<string | null>(null);
+  const transientErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -70,13 +79,20 @@ export default function PlayRoomClient({ roomId }: { roomId: string }) {
             | { type: "closed" }
             | { type: "chatHistory"; messages: ChatMessage[] }
             | { type: "chatMessage"; message: ChatMessage }
-            | { type: "error"; message: string };
+            | { type: "error"; message: string; fatal: boolean };
           if (msg.type === "lobby") setState({ kind: "lobby", view: msg.view });
           else if (msg.type === "game") setState({ kind: "game", view: msg.view });
           else if (msg.type === "closed") setState({ kind: "closed" });
           else if (msg.type === "chatHistory") setChatMessages(msg.messages);
           else if (msg.type === "chatMessage") setChatMessages((prev) => [...prev, msg.message]);
-          else setState({ kind: "error", message: msg.message, retryable: false });
+          else if (msg.fatal) setState({ kind: "error", message: msg.message, retryable: false });
+          else {
+            // A rejected action, not a broken connection — surface it briefly
+            // without touching the current lobby/game view underneath.
+            if (transientErrorTimerRef.current) clearTimeout(transientErrorTimerRef.current);
+            setTransientError(msg.message);
+            transientErrorTimerRef.current = setTimeout(() => setTransientError(null), 4000);
+          }
         } catch {
           // ignore malformed frames
         }
@@ -108,6 +124,7 @@ export default function PlayRoomClient({ roomId }: { roomId: string }) {
     return () => {
       cancelled = true;
       if (retryTimer) clearTimeout(retryTimer);
+      if (transientErrorTimerRef.current) clearTimeout(transientErrorTimerRef.current);
       wsRef.current?.close();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -145,6 +162,27 @@ export default function PlayRoomClient({ roomId }: { roomId: string }) {
   const sendCharlestonBeginSecond = useCallback(() => sendWs({ type: "charlestonBeginSecond" }), [sendWs]);
   const sendChat = useCallback((text: string) => sendWs({ type: "chat", text }), [sendWs]);
 
+  // Chat is attributed by PHYSICAL seat (see roomManager.ts), same space as
+  // LobbyView.seats and MatchView.players — unlike PlayerView's wind-labeled
+  // fields, so this can't reuse `view.handles`. Built from whichever view is
+  // currently active so the chat panel (which spans lobby → game) always has
+  // a physical-keyed lookup available.
+  const chatHandles: Partial<Record<PlayerId, string>> = useMemo(() => {
+    if (state.kind === "lobby") {
+      return Object.fromEntries(
+        state.view.seats.filter((s): s is typeof s & { handle: string } => !!s.handle).map((s) => [s.seat, s.handle]),
+      );
+    }
+    if (state.kind === "game" && state.view.match) {
+      return Object.fromEntries(
+        state.view.match.players
+          .filter((p): p is typeof p & { handle: string } => !!p.handle)
+          .map((p) => [p.seat, p.handle]),
+      );
+    }
+    return {};
+  }, [state]);
+
   const manualRetry = () => {
     retryCountRef.current = 0;
     setRetryTick((t) => t + 1);
@@ -152,6 +190,18 @@ export default function PlayRoomClient({ roomId }: { roomId: string }) {
 
   return (
     <main className="min-h-screen bg-gray-50 px-4 py-6">
+      {transientError && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-gray-900 text-white text-sm font-medium px-4 py-2 rounded-lg shadow-lg flex items-center gap-3">
+          <span>{transientError === "illegal move" ? "That wasn't a legal move right now." : transientError}</span>
+          <button
+            onClick={() => setTransientError(null)}
+            className="text-gray-400 hover:text-white text-xs font-bold"
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       <div className="max-w-3xl mx-auto">
         {state.kind === "connecting" && (
           <div className="text-center text-sm text-gray-400 py-16">Connecting to room {roomId}…</div>
@@ -209,6 +259,7 @@ export default function PlayRoomClient({ roomId }: { roomId: string }) {
           <ChatPanel
             messages={chatMessages}
             yourSeat={state.kind === "lobby" ? state.view.yourSeat : state.view.you}
+            handles={chatHandles}
             onSend={sendChat}
           />
         )}
@@ -247,7 +298,7 @@ function LobbyPanel({
       <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-3">
         {view.seats.map((s) => (
           <div key={s.seat} className="flex items-center justify-between gap-3 py-1">
-            <span className="w-16 text-sm font-semibold text-gray-700">{SEAT_LABELS[s.seat]}</span>
+            <span className="min-w-16 text-sm font-semibold text-gray-700">{formatSeat(s.seat, s.handle)}</span>
 
             {s.kind === "human" && (
               <span className="flex-1 text-sm text-gray-600">{s.isYou ? "You" : "Another player"}</span>
@@ -259,7 +310,7 @@ function LobbyPanel({
             )}
 
             <div className="flex items-center gap-2 shrink-0">
-              {(s.kind === "open" || s.kind === "cpu") && (
+              {view.isRoomCreator && (s.kind === "open" || s.kind === "cpu") && (
                 <select
                   defaultValue=""
                   onChange={(e) => {
@@ -299,14 +350,18 @@ function LobbyPanel({
         ))}
       </div>
 
-      <button
-        onClick={() => onAction({ action: "start" })}
-        disabled={view.yourSeat === null}
-        className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white font-semibold rounded-lg transition-colors"
-        title={view.yourSeat === null ? "Claim a seat first" : undefined}
-      >
-        Start game
-      </button>
+      {view.isRoomCreator ? (
+        <button
+          onClick={() => onAction({ action: "start" })}
+          disabled={view.yourSeat === null}
+          className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white font-semibold rounded-lg transition-colors"
+          title={view.yourSeat === null ? "Claim a seat first" : undefined}
+        >
+          Start game
+        </button>
+      ) : (
+        <p className="text-center text-xs text-gray-400 py-2">Waiting for the room creator to start the game…</p>
+      )}
 
       {view.isRoomCreator && (
         <button
@@ -361,7 +416,7 @@ function CharlestonPanel({
   const othersWaiting = view.charlestonWaitingOn.filter((s) => s !== view.you);
   const waitingBanner = othersWaiting.length > 0 && (
     <p className="text-xs text-amber-600 font-medium">
-      Waiting on: {othersWaiting.map((s) => SEAT_LABELS[s]).join(", ")}
+      Waiting on: {othersWaiting.map((s) => formatSeat(s, view.handles[s])).join(", ")}
     </p>
   );
 
@@ -372,7 +427,7 @@ function CharlestonPanel({
         <p className="text-sm text-gray-400">Charleston in progress…</p>
         {othersWaiting.length > 0 && (
           <p className="text-sm text-amber-600 font-medium">
-            Waiting on: {othersWaiting.map((s) => SEAT_LABELS[s]).join(", ")}
+            Waiting on: {othersWaiting.map((s) => formatSeat(s, view.handles[s])).join(", ")}
           </p>
         )}
       </div>
@@ -393,7 +448,7 @@ function CharlestonPanel({
             <div className="font-medium">Opponent votes:</div>
             {others.map((seat) => (
               <div key={seat} className="ml-2">
-                • {SEAT_LABELS[seat]}:{" "}
+                • {formatSeat(seat, view.handles[seat])}:{" "}
                 {cpuVotes[seat] === undefined ? (
                   <span className="text-gray-500 font-semibold">still deciding…</span>
                 ) : cpuVotes[seat] ? (
@@ -425,7 +480,8 @@ function CharlestonPanel({
 
   // isPass
   const stepInfo = CHARLESTON_STEPS[step];
-  const passingTo = SEAT_LABELS[PASSES_TO[stepInfo?.direction ?? "right"][view.you]];
+  const passToSeat = PASSES_TO[stepInfo?.direction ?? "right"][view.you];
+  const passingTo = formatSeat(passToSeat, view.handles[passToSeat]);
 
   return (
     <div className="space-y-4">
@@ -605,14 +661,19 @@ function GamePanel({
                 : "bg-gray-100 text-gray-500"
             }`}
           >
-            Turn {view.turnNumber} · {view.currentSeat === view.you ? "Your turn" : `${SEAT_LABELS[view.currentSeat]}'s turn`}
+            Turn {view.turnNumber} ·{" "}
+            {view.currentSeat === view.you
+              ? "Your turn"
+              : `${formatSeat(view.currentSeat, view.handles[view.currentSeat])}'s turn`}
           </span>
         </div>
 
         {view.winner && (
           <div className="bg-emerald-50 border border-emerald-300 rounded-lg p-4 text-center">
             <p className="font-bold text-emerald-800">
-              {view.winner === view.you ? "You won!" : `${SEAT_LABELS[view.winner]} wins.`}
+              {view.winner === view.you
+                ? "You won!"
+                : `${formatSeat(view.winner, view.handles[view.winner])} wins.`}
             </p>
             {view.winningPattern && <p className="text-sm text-emerald-700 mt-1">{view.winningPattern.name}</p>}
           </div>
@@ -627,7 +688,7 @@ function GamePanel({
         {claimWindow && (
           <div className="bg-amber-50 border-2 border-amber-400 rounded-lg p-4">
             <div className="text-sm font-bold text-amber-800 mb-2 flex items-center gap-1.5 flex-wrap">
-              <span>{SEAT_LABELS[claimWindow.discardedBy]} discards</span>
+              <span>{formatSeat(claimWindow.discardedBy, view.handles[claimWindow.discardedBy])} discards</span>
               <TileFace suit={claimWindow.discard.suit} val={claimWindow.discard.val} size="xs" />
               <span>— claim it?</span>
             </div>
@@ -670,7 +731,7 @@ function GamePanel({
                 o.seat === view.currentSeat ? "border-indigo-400 ring-1 ring-indigo-200" : "border-gray-200"
               }`}
             >
-              <div className="text-xs font-semibold text-gray-600">{SEAT_LABELS[o.seat]}</div>
+              <div className="text-xs font-semibold text-gray-600">{formatSeat(o.seat, view.handles[o.seat])}</div>
               <TileBack count={o.handCount} />
               {o.melds.length > 0 && (
                 <div className="flex gap-1 flex-wrap pt-1 border-t border-gray-100">
@@ -683,8 +744,12 @@ function GamePanel({
           ))}
         </div>
 
-        {/* Joker swap opportunities */}
-        {jokerSwaps.length > 0 && (
+        {/* Joker swap opportunities — only actionable on your own discard turn,
+            same gate as the reducer itself (pendingAction must be human_discard).
+            A swap is eligible based on hand contents alone, so without this gate
+            the button would show up any time regardless of turn and clicking it
+            would be rejected server-side as an "illegal move". */}
+        {canDiscard && jokerSwaps.length > 0 && (
           <div className="rounded-lg border border-purple-200 bg-purple-50/60 p-3 space-y-2">
             <div className="text-xs font-semibold text-purple-700 uppercase tracking-wide">Joker swap available</div>
             <p className="text-xs text-purple-700">
@@ -693,8 +758,10 @@ function GamePanel({
             <div className="space-y-1.5">
               {jokerSwaps.map((s, i) => (
                 <div key={i} className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs text-gray-600 w-14 shrink-0">
-                    {s.meldOwnerSeat === view.you ? "Your" : `${SEAT_LABELS[s.meldOwnerSeat]}'s`}
+                  <span className="text-xs text-gray-600 min-w-14 shrink-0">
+                    {s.meldOwnerSeat === view.you
+                      ? "Your"
+                      : `${formatSeat(s.meldOwnerSeat, view.handles[s.meldOwnerSeat])}'s`}
                   </span>
                   <span className="text-xs text-gray-500">give</span>
                   <TileFace suit={s.handTile.suit} val={s.handTile.val} size="xs" />
@@ -768,7 +835,9 @@ function GamePanel({
                     </span>
                   )}
                   {!canDiscard && !claimWindow && view.phase === "playing" && (
-                    <span className="text-xs text-gray-400">{SEAT_LABELS[view.currentSeat]}&apos;s turn…</span>
+                    <span className="text-xs text-gray-400">
+                      {formatSeat(view.currentSeat, view.handles[view.currentSeat])}&apos;s turn…
+                    </span>
                   )}
                 </>
               )}
@@ -798,7 +867,7 @@ function GamePanel({
           <h2 className="text-sm font-bold text-gray-700 uppercase tracking-wide">Discards</h2>
           {SEAT_ORDER.map((seat) => (
             <div key={seat} className="flex items-center gap-2">
-              <span className="w-14 text-xs text-gray-500 shrink-0">{SEAT_LABELS[seat]}</span>
+              <span className="min-w-14 text-xs text-gray-500 shrink-0">{formatSeat(seat, view.handles[seat])}</span>
               <div className="flex gap-0.5 flex-wrap">
                 {view.discardPile[seat]?.map((t) => (
                   <TileFace key={t.id} suit={t.suit} val={t.val} size="xs" />
@@ -863,7 +932,8 @@ function StandingsPanel({
   onCloseRoom: () => void;
 }) {
   const handleKick = (seat: PlayerId) => {
-    if (window.confirm(`Kick ${SEAT_LABELS[seat]}? A CPU takes over for the rest of the match — this can't be undone.`)) {
+    const label = formatSeat(seat, match.players.find((p) => p.seat === seat)?.handle);
+    if (window.confirm(`Kick ${label}? A CPU takes over for the rest of the match — this can't be undone.`)) {
       onKick(seat);
     }
   };
@@ -889,7 +959,7 @@ function StandingsPanel({
           <div key={p.seat} className="flex items-center justify-between gap-2 text-sm">
             <span className="flex items-center gap-1.5 min-w-0">
               <span className={`font-semibold ${p.seat === you ? "text-indigo-700" : "text-gray-700"}`}>
-                {SEAT_LABELS[p.seat]}
+                {formatSeat(p.seat, p.handle)}
               </span>
               {p.seat === match.dealerSeat && (
                 <span className="text-[10px] font-semibold text-amber-700 bg-amber-100 border border-amber-300 rounded px-1 py-0.5 shrink-0">
@@ -959,10 +1029,12 @@ function StandingsPanel({
 function ChatPanel({
   messages,
   yourSeat,
+  handles,
   onSend,
 }: {
   messages: ChatMessage[];
   yourSeat: PlayerId | null;
+  handles: Partial<Record<PlayerId, string>>;
   onSend: (text: string) => void;
 }) {
   const [draft, setDraft] = useState("");
@@ -990,7 +1062,7 @@ function ChatPanel({
         {messages.map((m, i) => (
           <div key={i}>
             <span className={`font-semibold ${m.seat === yourSeat ? "text-indigo-700" : "text-gray-700"}`}>
-              {SEAT_LABELS[m.seat]}:
+              {formatSeat(m.seat, handles[m.seat])}:
             </span>{" "}
             <span className="text-gray-800 break-words">{m.text}</span>
           </div>

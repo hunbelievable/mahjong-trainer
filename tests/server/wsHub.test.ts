@@ -56,7 +56,7 @@ describe("WsHub", () => {
     const sock = fakeSocket();
     hub.connect(id, "alice", sock); // lobby push #1
 
-    manager.start(id);
+    manager.start(id, "creator");
     hub.broadcastRoom(id);
 
     expect(sock.messages).toHaveLength(2);
@@ -77,7 +77,7 @@ describe("WsHub", () => {
     const { id } = manager.createRoom("creator");
     manager.claimSeat(id, "E", "alice");
     manager.claimSeat(id, "S", "bob");
-    manager.start(id);
+    manager.start(id, "creator");
 
     const aliceSock = fakeSocket();
     hub.connect(id, "alice", aliceSock);
@@ -100,10 +100,12 @@ describe("WsHub", () => {
     const spectatorSock = fakeSocket();
     hub.connect(id, "spectator", spectatorSock); // lobby push #1 (yourSeat: null)
 
-    manager.start(id);
+    manager.start(id, "creator");
     hub.broadcastRoom(id);
 
-    expect(spectatorSock.messages[1]).toMatchObject({ type: "error" });
+    // fatal: true — the client must show its terminal error screen here, not
+    // a dismissible toast, since there's no seated view to fall back to.
+    expect(spectatorSock.messages[1]).toMatchObject({ type: "error", fatal: true });
     expect(spectatorSock.close).toHaveBeenCalledWith(4001, "not seated");
   });
 
@@ -130,7 +132,7 @@ describe("WsHub", () => {
     const hub = new WsHub(manager);
     const sock = fakeSocket();
     hub.connect("NOSUCH", "alice", sock);
-    expect(sock.messages[0]).toMatchObject({ type: "error", message: "room not found" });
+    expect(sock.messages[0]).toMatchObject({ type: "error", message: "room not found", fatal: true });
   });
 
   it("broadcastChat sends the same message to every connection uniformly, with no redaction", () => {

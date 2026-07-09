@@ -9,7 +9,7 @@ function currentAccessToken(): string | null {
   return headers().get("cf-access-jwt-assertion") ?? cookies().get("CF_Authorization")?.value ?? null;
 }
 
-export async function currentUser(): Promise<{ id: string; email: string } | null> {
+export async function currentUser(): Promise<{ id: string; email: string; handle: string | null } | null> {
   return resolveUserFromToken(currentAccessToken());
 }
 

@@ -20,7 +20,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { parse } from "node:url";
-import { userIdFromRequest } from "./accessIdentity";
+import { userFromRequest } from "./accessIdentity";
 import { roomManager } from "./roomManager";
 import { wsHub } from "./wsHub";
 import type { PlayerId } from "@/engine/tiles";
@@ -64,13 +64,21 @@ export async function handleRoomApi(req: IncomingMessage, res: ServerResponse): 
   if (!pathname || !pathname.startsWith("/api/rooms")) return false;
 
   const segments = pathname.split("/").filter(Boolean); // ["api", "rooms", ...]
-  const userId = await userIdFromRequest(req);
+  const user = await userFromRequest(req);
+  const userId = user?.id ?? null;
 
   // POST /api/rooms — create a room
   if (segments.length === 2 && req.method === "POST") {
     if (!userId) { sendJson(res, 401, { error: "unauthorized" }); return true; }
     const room = roomManager.createRoom(userId);
     sendJson(res, 200, { roomId: room.id });
+    return true;
+  }
+
+  // GET /api/rooms — list joinable rooms (lobby phase, at least one open seat)
+  if (segments.length === 2 && req.method === "GET") {
+    if (!userId) { sendJson(res, 401, { error: "unauthorized" }); return true; }
+    sendJson(res, 200, { rooms: roomManager.listOpenRooms() });
     return true;
   }
 
@@ -112,7 +120,7 @@ export async function handleRoomApi(req: IncomingMessage, res: ServerResponse): 
     switch (body.action) {
       case "claimSeat":
         if (!body.seat) { sendJson(res, 400, { error: "seat required" }); return true; }
-        ok = roomManager.claimSeat(id, body.seat, userId);
+        ok = roomManager.claimSeat(id, body.seat, userId, user?.handle ?? null);
         break;
       case "releaseSeat":
         ok = roomManager.releaseSeat(id, userId);
@@ -122,10 +130,10 @@ export async function handleRoomApi(req: IncomingMessage, res: ServerResponse): 
           sendJson(res, 400, { error: "seat and difficulty required" });
           return true;
         }
-        ok = roomManager.setSeatCpu(id, body.seat, body.difficulty);
+        ok = roomManager.setSeatCpu(id, userId, body.seat, body.difficulty);
         break;
       case "start":
-        ok = roomManager.start(id);
+        ok = roomManager.start(id, userId);
         break;
       case "nextGame":
         ok = roomManager.startNextGame(id, userId);

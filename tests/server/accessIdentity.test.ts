@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { IncomingMessage } from "node:http";
-import { parseCookie, resolveUserFromToken, userIdFromRequest } from "@/lib/server/accessIdentity";
+import { parseCookie, resolveUserFromToken, userIdFromRequest, userFromRequest } from "@/lib/server/accessIdentity";
 
 vi.mock("@/lib/prisma", () => ({
   prisma: { user: { upsert: vi.fn() } },
@@ -56,16 +56,16 @@ describe("resolveUserFromToken", () => {
 
   it("finds-or-creates a User row keyed by the verified email", async () => {
     verify.mockResolvedValue("alice@example.com");
-    upsert.mockResolvedValue({ id: "user-1", email: "alice@example.com" });
+    upsert.mockResolvedValue({ id: "user-1", email: "alice@example.com", handle: null });
 
     const user = await resolveUserFromToken("good-token");
 
-    expect(user).toEqual({ id: "user-1", email: "alice@example.com" });
+    expect(user).toEqual({ id: "user-1", email: "alice@example.com", handle: null });
     expect(upsert).toHaveBeenCalledWith({
       where: { email: "alice@example.com" },
       update: {},
       create: { email: "alice@example.com" },
-      select: { id: true, email: true },
+      select: { id: true, email: true, handle: true },
     });
   });
 });
@@ -98,5 +98,20 @@ describe("userIdFromRequest", () => {
     const req = fakeRequest({});
     expect(await userIdFromRequest(req)).toBeNull();
     expect(verify).not.toHaveBeenCalled();
+  });
+});
+
+describe("userFromRequest", () => {
+  beforeEach(() => {
+    upsert.mockReset();
+    verify.mockReset();
+  });
+
+  it("returns the full user record, including a set handle", async () => {
+    verify.mockResolvedValue("dana@example.com");
+    upsert.mockResolvedValue({ id: "user-4", email: "dana@example.com", handle: "Dana" });
+
+    const req = fakeRequest({ "cf-access-jwt-assertion": "header-token" });
+    expect(await userFromRequest(req)).toEqual({ id: "user-4", email: "dana@example.com", handle: "Dana" });
   });
 });

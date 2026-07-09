@@ -119,7 +119,11 @@ app.prepare().then(async () => {
 
       const ok = roomManager.submit(roomId, userId, action);
       if (ok) wsHub.broadcastRoom(roomId);
-      else ws.send(JSON.stringify({ type: "error", message: "illegal move" }));
+      // Not fatal — a rejected action (stale UI, clicked something no longer
+      // legal, double-click) doesn't mean the connection or game is broken.
+      // The client should surface this as a transient notice, not replace the
+      // whole game view with a dead-end error screen.
+      else ws.send(JSON.stringify({ type: "error", message: "illegal move", fatal: false }));
     });
 
     ws.on("close", unregister);
