@@ -3,19 +3,19 @@
 //
 // Owns the canonical GameState (via the pure engine reducer, run live), records
 // an append-only log of concrete outcomes (Option B — see docs §6), and drives
-// CPU seats until the single designated human (`ctx.humanSeat`) must act — a
-// Charleston tile choice, a Second-Charleston vote, a discard, a claim/pass, or
-// a joker swap. Courtesy pass stays auto-declined (a deliberate simplification —
-// rare, optional, and "always decline" is a normal real choice). Multi-human
-// coordination (several humans staging Charleston or racing a claim at once) is
-// P4, design doc §16, and out of scope here. Clients only ever receive
-// `viewFor(seat)` (redacted). Transport (WS/HTTP) and identity (Auth.js) wrap
-// this — this module has no I/O.
+// CPU seats while every real human seat acts for itself — Charleston staging
+// (a barrier: every human seat must stage before a step executes), the
+// Second-Charleston vote, discards, claim windows (a bounded race with
+// priority + tie-break resolution), and joker swaps. Courtesy pass stays
+// single-human/auto-declined (a deliberate simplification — rare, optional,
+// and "always decline" is a normal real choice). Clients only ever receive
+// `viewFor(seat)` (redacted). Transport (WS/HTTP) and identity wrap this —
+// this module has no I/O.
 // =============================================================================
 
 import { createGameState, gameReducer } from "@/engine/gameEngine";
 import type { GameState, GameAction, EngineContext } from "@/engine/gameEngine";
-import { DIFFICULTY_PRESETS, chooseTilesForCharleston } from "@/engine/cpu";
+import { DIFFICULTY_PRESETS } from "@/engine/cpu";
 import type { DifficultyLevel, SeatStrategies } from "@/engine/cpu";
 import { PATTERNS } from "@/engine/patterns";
 import type { PlayerId } from "@/engine/tiles";
@@ -32,7 +32,8 @@ export type RoomEffect =
   | { type: "discard"; seat: PlayerId; tileId: string }
   | { type: "claim"; seat: PlayerId; claimType: string; tileIds: string[] }
   | { type: "win"; seat: PlayerId }
-  | { type: "wall_game" };
+  | { type: "wall_game" }
+  | { type: "seat_cpu_takeover"; seat: PlayerId };
 
 export type RoomEvent = RoomEffect & { seq: number; at: number };
 
@@ -89,6 +90,22 @@ export class GameRoom {
   get winner(): PlayerId | null { return this.state.winner; }
   get events(): readonly RoomEvent[] { return this._events; }
 
+  /** The finished game's outcome (wind-labeled), or null while still in progress. Used by RoomManager for match scoring. */
+  get result(): {
+    winner: PlayerId | null;
+    winningPattern: GameState["winningPattern"];
+    winKind: GameState["winKind"];
+    winDiscardedBy: PlayerId | null;
+  } | null {
+    if (this.state.phase !== "finished") return null;
+    return {
+      winner: this.state.winner,
+      winningPattern: this.state.winningPattern,
+      winKind: this.state.winKind,
+      winDiscardedBy: this.state.winDiscardedBy,
+    };
+  }
+
   /** The human seat that must act right now (discard), or null. */
   get waitingOn(): PlayerId | null {
     if (this.state.phase !== "playing") return null;
@@ -97,36 +114,37 @@ export class GameRoom {
     return this.ctx.humanSeats.has(seat) ? seat : null;
   }
 
-  /**
-   * The human seat that must respond to an open claim window, or null. Claim
-   * eligibility is computed engine-side only for `ctx.humanSeat` (the single
-   * designated human — see openClaimWindow in gameEngine.ts), so this only
-   * ever resolves for a single-human room. Multi-human claim races are P4
-   * (design doc §16) and out of scope here.
-   */
-  get waitingOnClaim(): PlayerId | null {
-    if (this.state.phase !== "playing") return null;
-    if (this.state.pendingAction?.type !== "claim_window") return null;
-    return this.ctx.humanSeats.has(this.ctx.humanSeat) ? this.ctx.humanSeat : null;
+  /** Every human seat still eligible to respond to an open claim window (empty if none/not open). */
+  get waitingOnClaim(): PlayerId[] {
+    if (this.state.phase !== "playing") return [];
+    const pa = this.state.pendingAction;
+    if (pa?.type !== "claim_window") return [];
+    return SEAT_ORDER.filter((s) => pa.eligibleSeats[s] !== undefined && pa.responses[s] === undefined);
   }
 
-  /**
-   * The human seat that must act on a Charleston step (staging 3 tiles, or
-   * voting whether to play the Second Charleston), or null. Same single-human
-   * scope as claims — `ctx.humanSeat` is the only seat the engine will ever
-   * pause on here; a second human's Charleston is still CPU-driven until the
-   * P4 multi-seat staging barrier exists.
-   */
-  get waitingOnCharleston(): PlayerId | null {
-    if (this.state.phase !== "charleston") return null;
-    const t = this.state.pendingAction?.type;
-    if (t !== "human_charleston_pass" && t !== "human_charleston_stop") return null;
-    return this.ctx.humanSeats.has(this.ctx.humanSeat) ? this.ctx.humanSeat : null;
+  /** Every human seat still needing to stage tiles or vote for the current Charleston step (empty if none/not open). */
+  get waitingOnCharleston(): PlayerId[] {
+    if (this.state.phase !== "charleston") return [];
+    const pa = this.state.pendingAction;
+    if (pa?.type === "human_charleston_pass") {
+      return SEAT_ORDER.filter((s) => this.ctx.humanSeats.has(s) && !this.state.charleston?.staged[s]);
+    }
+    if (pa?.type === "human_charleston_stop") {
+      return SEAT_ORDER.filter((s) => this.ctx.humanSeats.has(s) && pa.votes[s] === undefined);
+    }
+    return [];
   }
 
   /** The redacted view for one seat — the ONLY state a client may receive. */
   viewFor(seat: PlayerId): PlayerView {
-    return redactStateForSeat(this.state, seat);
+    return {
+      ...redactStateForSeat(this.state, seat),
+      // Safe to attach unfiltered — these getters already only ever name real
+      // human seats (waitingOnCharleston) or reduce to a bare count
+      // (waitingOnClaim.length), never another seat's claim eligibility.
+      charlestonWaitingOn: this.waitingOnCharleston,
+      claimPendingCount: this.waitingOnClaim.length,
+    };
   }
 
   /** Full authoritative state — server-side resume/snapshot only, never sent to a client. */
@@ -147,6 +165,8 @@ export class GameRoom {
   /**
    * A human seat submits a play action. Returns false if the move isn't legal
    * for that seat right now (wrong seat, not their turn, no such window open).
+   * The acting seat is stamped onto the action itself (never trusted from the
+   * action object) so the reducer can address barriers/races to the right seat.
    */
   submit(seat: PlayerId, action: GameAction): boolean {
     if (!this.ctx.humanSeats.has(seat)) return false;
@@ -161,29 +181,56 @@ export class GameRoom {
     }
 
     if (action.type === "HUMAN_CLAIM" || action.type === "HUMAN_PASS") {
-      if (this.waitingOnClaim !== seat) return false;
-      if (!this.apply(action)) return false;
+      if (!this.waitingOnClaim.includes(seat)) return false;
+      if (!this.apply({ ...action, seat })) return false;
       this.drive();
       return true;
     }
 
     if (action.type === "HUMAN_STAGE_CHARLESTON") {
-      if (this.waitingOnCharleston !== seat) return false;
       if (this.state.pendingAction?.type !== "human_charleston_pass") return false;
-      if (!this.apply(action)) return false;
+      if (!this.waitingOnCharleston.includes(seat)) return false;
+      if (!this.apply({ ...action, seat })) return false;
       this.drive();
       return true;
     }
 
     if (action.type === "STOP_CHARLESTON" || action.type === "BEGIN_SECOND_CHARLESTON") {
-      if (this.waitingOnCharleston !== seat) return false;
       if (this.state.pendingAction?.type !== "human_charleston_stop") return false;
-      if (!this.apply(action)) return false;
+      if (!this.waitingOnCharleston.includes(seat)) return false;
+      if (!this.apply({ ...action, seat })) return false;
       this.drive();
       return true;
     }
 
     return false; // courtesy pass + lobby actions stay server-driven / out of WS scope
+  }
+
+  /**
+   * Convert a real human seat to CPU control for the rest of this game
+   * (kicked by the room's creator, or self-forfeited) — synthesizes a CPU
+   * decision for whatever that seat currently owed the game (see
+   * CONVERT_TO_CPU in the engine), so the room is never left stalled waiting
+   * on someone who can no longer submit(). Returns false if the seat is
+   * already CPU or the game isn't running.
+   */
+  convertSeatToCpu(seat: PlayerId, difficulty: DifficultyLevel = "intermediate"): boolean {
+    if (!this.ctx.humanSeats.has(seat)) return false;
+    if (this.state.phase !== "charleston" && this.state.phase !== "playing") return false;
+
+    this.ctx.humanSeats.delete(seat);
+    this.ctx.strategies[seat] = DIFFICULTY_PRESETS[difficulty];
+    // ctx.humanSeat is the single-seat fallback used by courtesy pass and the
+    // all-CPU Charleston/vote synthesis path — must never point at a seat
+    // that's no longer human.
+    if (this.ctx.humanSeat === seat) {
+      this.ctx.humanSeat = Array.from(this.ctx.humanSeats)[0] ?? "E";
+    }
+
+    this._events.push({ seq: this._seq++, at: Date.now(), type: "seat_cpu_takeover", seat });
+    this.apply({ type: "CONVERT_TO_CPU", seat });
+    this.drive();
+    return true;
   }
 
   // ── Internals ──────────────────────────────────────────────────────────────
@@ -200,9 +247,12 @@ export class GameRoom {
   }
 
   /**
-   * Advance the game until the human must act or it finishes: auto-plays
-   * Charleston/courtesy for CPU seats (pausing for the human's real choice),
-   * runs CPU turns, and pauses on any claim window the human is eligible for.
+   * Advance the game until a real human must act or it finishes. The reducer
+   * itself already resolves Charleston steps/votes and claim windows the
+   * instant nobody real is left to wait on (including the all-CPU-room case,
+   * synchronously within apply() below) — so this loop's job is just courtesy
+   * pass (still single-human/auto-declined) and CPU turns, pausing whenever a
+   * pendingAction still names a real human.
    */
   private drive(): void {
     let guard = 5000;
@@ -211,19 +261,8 @@ export class GameRoom {
       const pa = this.state.pendingAction;
 
       if (this.state.phase === "charleston") {
-        const humanIsReal = this.ctx.humanSeats.has(this.ctx.humanSeat);
-
-        if (pa?.type === "human_charleston_pass") {
-          if (humanIsReal) return; // wait for the human's real tile choice — see submit()
-          const seat = this.ctx.humanSeat;
-          const strategy = this.ctx.strategies[seat] ?? DIFFICULTY_PRESETS.intermediate;
-          const tiles = chooseTilesForCharleston(
-            strategy, this.state.hands[seat], this.state.wall, this.ctx.patterns,
-          );
-          if (!this.apply({ type: "HUMAN_STAGE_CHARLESTON", tileIds: tiles.map((t) => t.id) })) return;
-        } else if (pa?.type === "human_charleston_stop") {
-          if (humanIsReal) return; // wait for the human's real Play/Skip vote — see submit()
-          if (!this.apply({ type: "STOP_CHARLESTON" })) return; // no human here — skip Second Charleston
+        if (pa?.type === "human_charleston_pass" || pa?.type === "human_charleston_stop") {
+          return; // a real human still needs to stage or vote — see submit()
         } else if (pa?.type === "human_courtesy_propose") {
           if (!this.apply({ type: "HUMAN_COURTESY_RESPOND", count: 0 })) return;
         } else if (pa?.type === "human_courtesy_select") {
@@ -239,10 +278,7 @@ export class GameRoom {
       if (pa === null) {
         if (!this.apply({ type: "ADVANCE_CPU" })) return;
       } else if (pa.type === "claim_window") {
-        if (this.ctx.humanSeats.has(this.ctx.humanSeat)) {
-          return; // a human is eligible to claim — wait for submit()
-        }
-        if (!this.apply({ type: "HUMAN_PASS" })) return; // no human eligible here — CPUs auto-resolve
+        return; // a real human is still eligible to respond — see submit()
       } else if (pa.type === "human_discard") {
         return; // a human must act — wait for submit()
       } else {

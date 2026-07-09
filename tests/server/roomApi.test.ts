@@ -4,10 +4,15 @@ import { handleRoomApi } from "@/lib/server/roomApi";
 import { roomManager } from "@/lib/server/roomManager";
 
 vi.mock("@/lib/prisma", () => ({
-  prisma: { session: { findUnique: vi.fn() } },
+  prisma: { user: { upsert: vi.fn() } },
+}));
+vi.mock("@/lib/server/cfAccess", () => ({
+  verifyAccessJwt: vi.fn(),
 }));
 import { prisma } from "@/lib/prisma";
-const findUnique = prisma.session.findUnique as unknown as ReturnType<typeof vi.fn>;
+import { verifyAccessJwt } from "@/lib/server/cfAccess";
+const upsert = prisma.user.upsert as unknown as ReturnType<typeof vi.fn>;
+const verify = verifyAccessJwt as unknown as ReturnType<typeof vi.fn>;
 
 const TOKEN = "test-token";
 const USER_ID = "user-1";
@@ -31,14 +36,16 @@ beforeAll(async () => {
 afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
 beforeEach(() => {
-  findUnique.mockReset();
-  findUnique.mockResolvedValue({ userId: USER_ID, sessionToken: TOKEN, expires: new Date(Date.now() + 60_000) });
+  verify.mockReset();
+  upsert.mockReset();
+  verify.mockResolvedValue("alice@example.com");
+  upsert.mockResolvedValue({ id: USER_ID, email: "alice@example.com" });
 });
 
 function authedFetch(path: string, init?: RequestInit) {
   return fetch(`${baseUrl}${path}`, {
     ...init,
-    headers: { ...(init?.headers ?? {}), Cookie: `authjs.session-token=${TOKEN}` },
+    headers: { ...(init?.headers ?? {}), "Cf-Access-Jwt-Assertion": TOKEN },
   });
 }
 
@@ -53,7 +60,7 @@ describe("handleRoomApi", () => {
   });
 
   it("POST /api/rooms requires auth", async () => {
-    findUnique.mockResolvedValue(null); // no valid session
+    verify.mockResolvedValue(null); // Access JWT fails verification
     const res = await authedFetch("/api/rooms", { method: "POST" });
     expect(res.status).toBe(401);
   });
@@ -121,7 +128,8 @@ describe("handleRoomApi", () => {
       body: JSON.stringify({ action: "claimSeat", seat: "E" }),
     });
 
-    findUnique.mockResolvedValue({ userId: "user-2", sessionToken: TOKEN, expires: new Date(Date.now() + 60_000) });
+    verify.mockResolvedValue("bob@example.com");
+    upsert.mockResolvedValue({ id: "user-2", email: "bob@example.com" });
     const res = await authedFetch(`/api/rooms/${roomId}/actions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

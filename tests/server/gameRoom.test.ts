@@ -10,6 +10,12 @@ function roomWithHuman(seat: PlayerId): GameRoom {
   return new GameRoom(seats);
 }
 
+function roomWithHumans(humanSeats: PlayerId[]): GameRoom {
+  const seats = { E: CPU, S: CPU, W: CPU, N: CPU } as Record<PlayerId, SeatConfig>;
+  for (const seat of humanSeats) seats[seat] = { kind: "human", userId: `user-${seat}` };
+  return new GameRoom(seats);
+}
+
 /**
  * Drive a just-started room through its Charleston (staging 3 arbitrary
  * non-joker tiles each step, then voting to skip the Second Charleston) so
@@ -93,18 +99,35 @@ describe("GameRoom", () => {
 
   it("runs an all-CPU room to completion on its own", () => {
     const room = new GameRoom({ E: CPU, S: CPU, W: CPU, N: CPU });
+    expect(room.result).toBeNull(); // not finished before start()
     room.start();
     expect(room.phase).toBe("finished");
     expect(room.waitingOn).toBeNull();
     // it produced concrete discard events and ended in a win or a wall game
     expect(room.events.some((e) => e.type === "discard")).toBe(true);
     expect(room.events.some((e) => e.type === "win" || e.type === "wall_game")).toBe(true);
+
+    // result classifies the outcome consistently regardless of which random
+    // game this run happened to produce — see lib/server/match.ts for how
+    // RoomManager turns this into standings.
+    const result = room.result!;
+    expect(result.winner).toBe(room.winner);
+    if (result.winner === null) {
+      expect(result.winKind).toBeNull();
+      expect(result.winDiscardedBy).toBeNull();
+    } else if (result.winKind === "discard") {
+      expect(result.winDiscardedBy).not.toBeNull();
+    } else if (result.winKind === "self_draw") {
+      expect(result.winDiscardedBy).toBeNull();
+    } else {
+      throw new Error(`unexpected winKind for a real winner: ${result.winKind}`);
+    }
   });
 
   it("rejects HUMAN_CLAIM/HUMAN_PASS when no claim window is open", () => {
     const room = roomWithHuman("E");
     room.start(); // paused at a Charleston step, not a claim window
-    expect(room.waitingOnClaim).toBeNull();
+    expect(room.waitingOnClaim).toEqual([]);
     expect(room.submit("E", { type: "HUMAN_PASS" })).toBe(false);
     expect(room.submit("E", { type: "HUMAN_CLAIM", claimType: "pung" })).toBe(false);
   });
@@ -124,7 +147,7 @@ describe("GameRoom", () => {
 
       let guard = 500;
       while (room.phase === "playing" && guard-- > 0) {
-        if (room.waitingOnClaim === "E") {
+        if (room.waitingOnClaim.includes("E")) {
           sawClaimWindow = true;
           // Before submitting, confirm the pause is real: the pending action
           // is still a claim_window (drive() did not silently auto-resolve it).
@@ -152,7 +175,7 @@ describe("GameRoom", () => {
       driveCharlestonToPlay(room, "E");
       let guard = 500;
       while (room.phase === "playing" && guard-- > 0) {
-        if (room.waitingOnClaim === "E") {
+        if (room.waitingOnClaim.includes("E")) {
           found = true;
           const discardedBy = room.snapshot().pendingAction as { discardedBy: PlayerId };
           expect(room.viewFor(discardedBy.discardedBy).pendingActionForYou).toBeNull();
@@ -184,7 +207,7 @@ describe("GameRoom — Charleston", () => {
     const room = roomWithHuman("E");
     room.start();
     expect(room.phase).toBe("charleston");
-    expect(room.waitingOnCharleston).toBe("E");
+    expect(room.waitingOnCharleston).toEqual(["E"]);
     expect(room.snapshot().pendingAction).toEqual({ type: "human_charleston_pass", step: 0 });
     // 13 tiles dealt, none staged away yet — proves this wasn't auto-resolved.
     expect(room.viewFor("E").yourHand).toHaveLength(13);
@@ -215,11 +238,11 @@ describe("GameRoom — Charleston", () => {
     const room = roomWithHuman("E");
     room.start();
     for (let step = 0; step < 3; step++) {
-      expect(room.waitingOnCharleston).toBe("E");
+      expect(room.waitingOnCharleston).toEqual(["E"]);
       room.submit("E", { type: "HUMAN_STAGE_CHARLESTON", tileIds: pick3(room, "E") });
     }
     expect(room.snapshot().pendingAction?.type).toBe("human_charleston_stop");
-    expect(room.waitingOnCharleston).toBe("E");
+    expect(room.waitingOnCharleston).toEqual(["E"]);
 
     expect(room.submit("E", { type: "STOP_CHARLESTON" })).toBe(true);
     expect(room.phase).toBe("playing");
@@ -235,7 +258,7 @@ describe("GameRoom — Charleston", () => {
     expect(room.submit("E", { type: "BEGIN_SECOND_CHARLESTON" })).toBe(true);
     expect(room.phase).toBe("charleston");
     expect(room.snapshot().pendingAction).toEqual({ type: "human_charleston_pass", step: 3 });
-    expect(room.waitingOnCharleston).toBe("E");
+    expect(room.waitingOnCharleston).toEqual(["E"]);
   });
 
   it("rejects STOP_CHARLESTON/BEGIN_SECOND_CHARLESTON when no stop vote is open", () => {
@@ -245,3 +268,146 @@ describe("GameRoom — Charleston", () => {
     expect(room.submit("E", { type: "BEGIN_SECOND_CHARLESTON" })).toBe(false);
   });
 });
+
+describe("GameRoom — viewFor exposes safe multi-seat pending state", () => {
+  it("charlestonWaitingOn names the real human seats still needing to act, visible to every viewer", () => {
+    const room = roomWithHumans(["E", "S"]);
+    room.start();
+    // Both E's and S's own views agree on who's still pending — this is public/safe info.
+    expect(room.viewFor("E").charlestonWaitingOn.sort()).toEqual(["E", "S"]);
+    expect(room.viewFor("S").charlestonWaitingOn.sort()).toEqual(["E", "S"]);
+
+    const eTiles = room.viewFor("E").yourHand.filter((t) => t.suit !== "joker").slice(0, 3).map((t) => t.id);
+    room.submit("E", { type: "HUMAN_STAGE_CHARLESTON", tileIds: eTiles });
+    expect(room.viewFor("S").charlestonWaitingOn).toEqual(["S"]);
+  });
+
+  it("claimPendingCount is a count only — never the eligible seats' identities", () => {
+    const room = roomWithHumans(["E"]);
+    room.start();
+    // Outside any claim window, the count is zero for everyone.
+    expect(room.viewFor("E").claimPendingCount).toBe(0);
+  });
+});
+
+describe("GameRoom — multi-human Charleston", () => {
+  it("waits on BOTH human seats to stage before executing the step", () => {
+    const room = roomWithHumans(["E", "S"]);
+    room.start();
+    expect(room.waitingOnCharleston.sort()).toEqual(["E", "S"]);
+
+    const eTiles = room.viewFor("E").yourHand.filter((t) => t.suit !== "joker").slice(0, 3).map((t) => t.id);
+    expect(room.submit("E", { type: "HUMAN_STAGE_CHARLESTON", tileIds: eTiles })).toBe(true);
+
+    // Still step 0 — only E has staged, S hasn't yet.
+    expect(room.snapshot().charleston?.step).toBe(0);
+    expect(room.waitingOnCharleston).toEqual(["S"]);
+    // E already staged this step — nothing more for E to do until S catches up.
+    expect(room.viewFor("E").pendingActionForYou).toBeNull();
+    expect(room.viewFor("S").pendingActionForYou).toMatchObject({ type: "human_charleston_pass", step: 0 });
+
+    const sTiles = room.viewFor("S").yourHand.filter((t) => t.suit !== "joker").slice(0, 3).map((t) => t.id);
+    expect(room.submit("S", { type: "HUMAN_STAGE_CHARLESTON", tileIds: sTiles })).toBe(true);
+
+    // Both staged — the step executed and advanced.
+    expect(room.snapshot().charleston?.step).toBe(1);
+    expect(room.waitingOnCharleston.sort()).toEqual(["E", "S"]);
+  });
+
+  it("rejects a seat staging twice for the same step", () => {
+    const room = roomWithHumans(["E", "S"]);
+    room.start();
+    const eTiles = room.viewFor("E").yourHand.filter((t) => t.suit !== "joker").slice(0, 3).map((t) => t.id);
+    expect(room.submit("E", { type: "HUMAN_STAGE_CHARLESTON", tileIds: eTiles })).toBe(true);
+    expect(room.submit("E", { type: "HUMAN_STAGE_CHARLESTON", tileIds: eTiles })).toBe(false);
+  });
+
+  it("a decisive skip vote from one seat ends the Second Charleston immediately, without waiting on the other", () => {
+    const room = roomWithHumans(["E", "S"]);
+    room.start();
+    for (let step = 0; step < 3; step++) {
+      const eTiles = room.viewFor("E").yourHand.filter((t) => t.suit !== "joker").slice(0, 3).map((t) => t.id);
+      room.submit("E", { type: "HUMAN_STAGE_CHARLESTON", tileIds: eTiles });
+      const sTiles = room.viewFor("S").yourHand.filter((t) => t.suit !== "joker").slice(0, 3).map((t) => t.id);
+      room.submit("S", { type: "HUMAN_STAGE_CHARLESTON", tileIds: sTiles });
+    }
+    expect(room.waitingOnCharleston.sort()).toEqual(["E", "S"]);
+    expect(room.submit("E", { type: "STOP_CHARLESTON" })).toBe(true);
+    // Resolved without S ever voting — E's skip is decisive on its own.
+    expect(room.phase).toBe("playing");
+  });
+
+  it("plays the Second Charleston only once every human seat votes to play", () => {
+    const room = roomWithHumans(["E", "S"]);
+    room.start();
+    for (let step = 0; step < 3; step++) {
+      const eTiles = room.viewFor("E").yourHand.filter((t) => t.suit !== "joker").slice(0, 3).map((t) => t.id);
+      room.submit("E", { type: "HUMAN_STAGE_CHARLESTON", tileIds: eTiles });
+      const sTiles = room.viewFor("S").yourHand.filter((t) => t.suit !== "joker").slice(0, 3).map((t) => t.id);
+      room.submit("S", { type: "HUMAN_STAGE_CHARLESTON", tileIds: sTiles });
+    }
+    expect(room.submit("E", { type: "BEGIN_SECOND_CHARLESTON" })).toBe(true);
+    // Still waiting on S's vote — E wanting to play isn't decisive by itself.
+    expect(room.phase).toBe("charleston");
+    expect(room.snapshot().pendingAction?.type).toBe("human_charleston_stop");
+    expect(room.submit("S", { type: "BEGIN_SECOND_CHARLESTON" })).toBe(true);
+    expect(room.phase).toBe("charleston");
+    expect(room.snapshot().charleston?.step).toBe(3); // Second Charleston under way
+  });
+});
+
+describe("GameRoom — multi-human claim windows", () => {
+  /** Drive both humans through Charleston into play, always skipping the Second Charleston. */
+  function driveBothToPlay(room: GameRoom, seats: PlayerId[]): void {
+    for (let step = 0; step < 3; step++) {
+      for (const seat of seats) {
+        const tiles = room.viewFor(seat).yourHand.filter((t) => t.suit !== "joker").slice(0, 3).map((t) => t.id);
+        room.submit(seat, { type: "HUMAN_STAGE_CHARLESTON", tileIds: tiles });
+      }
+    }
+    room.submit(seats[0], { type: "STOP_CHARLESTON" });
+  }
+
+  it("opens a claim window to every eligible human seat independently — one seat's pass doesn't affect the other's view", () => {
+    let sawSimultaneousWindow = false;
+
+    for (let attempt = 0; attempt < 8 && !sawSimultaneousWindow; attempt++) {
+      const room = roomWithHumans(["E", "S"]);
+      room.start();
+      driveBothToPlay(room, ["E", "S"]);
+
+      let guard = 500;
+      while (room.phase === "playing" && guard-- > 0) {
+        const waiting = room.waitingOnClaim;
+        if (waiting.length >= 2) {
+          sawSimultaneousWindow = true;
+          // Both seats see it's their turn to respond, independently.
+          for (const seat of waiting) {
+            expect(room.viewFor(seat).pendingActionForYou?.type).toBe("claim_window");
+          }
+          room.submit(waiting[0], { type: "HUMAN_PASS" });
+          // The other seat is still eligible and hasn't been silently resolved.
+          expect(room.waitingOnClaim).toContain(waiting[1]);
+          room.submit(waiting[1], { type: "HUMAN_PASS" });
+        } else if (waiting.length === 1) {
+          room.submit(waiting[0], { type: "HUMAN_PASS" });
+        } else if (room.waitingOn) {
+          const tile = room.viewFor(room.waitingOn).yourHand.find((t) => t.suit !== "joker");
+          if (!tile) break;
+          room.submit(room.waitingOn, { type: "HUMAN_DISCARD", tileId: tile.id });
+        } else {
+          break;
+        }
+      }
+      expect(room.phase === "playing" || room.phase === "finished").toBe(true);
+    }
+    // Not asserting sawSimultaneousWindow — genuinely rare with only 2 human
+    // seats among 4; the per-response independence check above is what matters
+    // whenever it does happen, over these 8 attempts.
+  });
+});
+
+// HUMAN_JOKER_SWAP's seat-correctness fix (ctx.humanSeat → state.currentSeat) is
+// covered precisely at the reducer level in tests/engine/multiHuman.test.ts —
+// constructing a real exposed joker meld here would need a full claim flow for
+// little extra coverage.

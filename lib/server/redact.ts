@@ -14,6 +14,7 @@ import { findJokerSwaps, type GameState, type Meld, type PendingAction, type Gam
 import type { HandPattern } from "@/engine/patterns";
 import type { Tile, PlayerId } from "@/engine/tiles";
 import { SEAT_ORDER } from "@/engine/tiles";
+import type { MatchView } from "./match";
 
 /** What one seat is allowed to know about another seat. Counts + public tiles only. */
 export interface OpponentView {
@@ -59,20 +60,50 @@ export interface PlayerView {
   /** The pending action only if it is this seat's to act on; otherwise null. */
   pendingActionForYou: PendingAction;
 
+  /**
+   * Human seats still needing to stage tiles or vote for the current Charleston
+   * step, if any — populated by GameRoom.viewFor (needs ctx.humanSeats, which
+   * this pure function doesn't have). Safe to show in full: it reveals only
+   * who hasn't acted yet, never hand contents. Empty outside Charleston.
+   */
+  charlestonWaitingOn: PlayerId[];
+  /**
+   * How many seats are still eligible-and-undecided in an open claim window —
+   * a COUNT only, never which seats, since claim eligibility itself reveals
+   * hand info (how many matching tiles someone holds). Populated by
+   * GameRoom.viewFor. 0 outside an open claim window.
+   */
+  claimPendingCount: number;
+
   turnNumber: number;
   winner: PlayerId | null;
   /** Public once the game is finished. Contains no tile identities. */
   winningPattern: HandPattern | null;
   /** Human-readable event log. Must remain public-safe (no concealed tiles). */
   log: string[];
+
+  /**
+   * Match (multi-game) standings — populated by RoomManager after calling
+   * redactStateForSeat, not by this function itself (redaction here only knows
+   * about one GameRoom's wind-labeled state, not the physical-seat Match layer
+   * on top of it). Null until a match exists. See lib/server/match.ts.
+   */
+  match: MatchView | null;
 }
 
 /**
- * Decide whether the current pending action belongs to `seat`.
- * - human_discard → the seat whose turn it is (currentSeat)
- * - claim_window  → any seat that could claim (i.e. not the discarder)
- * - charleston / courtesy → single-human flows; MVP multiplayer auto-plays them
- *   server-side, so they carry no concealed tiles and are passed through.
+ * Decide whether the current pending action belongs to `seat`, and narrow it
+ * to exactly what `seat` is allowed to see.
+ * - human_discard     → the seat whose turn it is (currentSeat)
+ * - claim_window      → only a seat that's eligible AND hasn't responded yet;
+ *   `eligibleSeats` is narrowed to that seat's own entry so a client can never
+ *   learn another seat's claim eligibility (which would leak hand info) or
+ *   who else has responded.
+ * - human_charleston_pass → only a seat that hasn't staged this step yet.
+ * - human_charleston_stop → only a seat that hasn't voted yet. `votes` is
+ *   passed through in full — a vote is a plain boolean, not hand info.
+ * - courtesy → single-human flows; multiplayer auto-plays them server-side,
+ *   so they carry no concealed tiles and are passed through unchanged.
  */
 function pendingActionForSeat(state: GameState, seat: PlayerId): PendingAction {
   const pa = state.pendingAction;
@@ -80,8 +111,15 @@ function pendingActionForSeat(state: GameState, seat: PlayerId): PendingAction {
   switch (pa.type) {
     case "human_discard":
       return seat === state.currentSeat ? pa : null;
-    case "claim_window":
-      return seat !== pa.discardedBy ? pa : null;
+    case "claim_window": {
+      const types = pa.eligibleSeats[seat];
+      if (!types || pa.responses[seat] !== undefined) return null;
+      return { ...pa, eligibleSeats: { [seat]: types }, responses: {} };
+    }
+    case "human_charleston_pass":
+      return state.charleston?.staged[seat] ? null : pa;
+    case "human_charleston_stop":
+      return pa.votes[seat] !== undefined ? null : pa;
     default:
       return pa;
   }
@@ -114,10 +152,13 @@ export function redactStateForSeat(state: GameState, you: PlayerId): PlayerView 
     yourFreshTileId:
       state.lastDraw && state.lastDraw.seat === you ? state.lastDraw.tileId : null,
     pendingActionForYou: pendingActionForSeat(state, you),
+    charlestonWaitingOn: [],
+    claimPendingCount: 0,
     turnNumber: state.turnNumber,
     winner: state.winner,
     winningPattern: state.winningPattern,
     log: state.log,
+    match: null,
   };
 }
 

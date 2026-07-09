@@ -24,10 +24,13 @@ function baseView(overrides: Partial<PlayerView> = {}): PlayerView {
     lastDrawSeat: null,
     yourFreshTileId: null,
     pendingActionForYou: null,
+    charlestonWaitingOn: [],
+    claimPendingCount: 0,
     turnNumber: 5,
     winner: null,
     winningPattern: null,
     log: [],
+    match: null,
     ...overrides,
   };
 }

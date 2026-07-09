@@ -96,10 +96,10 @@ export function useObserve(options: ObserveOptions = {}) {
         const hand = s.hands[OBSERVER_SEAT];
         const strategy = strategiesRef.current[OBSERVER_SEAT] ?? DIFFICULTY_PRESETS.intermediate;
         const tiles = chooseTilesForCharleston(strategy, hand, s.wall, PATTERNS);
-        return { type: "HUMAN_STAGE_CHARLESTON", tileIds: tiles.map(t => t.id) };
+        return { type: "HUMAN_STAGE_CHARLESTON", tileIds: tiles.map(t => t.id), seat: OBSERVER_SEAT };
       }
       if (s.pendingAction?.type === "human_charleston_stop") {
-        return { type: "BEGIN_SECOND_CHARLESTON" };
+        return { type: "BEGIN_SECOND_CHARLESTON", seat: OBSERVER_SEAT };
       }
       // No real observer to negotiate courtesy — always decline (count 0).
       if (s.pendingAction?.type === "human_courtesy_propose") {
@@ -129,7 +129,7 @@ export function useObserve(options: ObserveOptions = {}) {
 
     if (s.pendingAction.type === "claim_window") {
       // Human seat passes — CPU claims are resolved in the engine
-      return { type: "HUMAN_PASS" };
+      return { type: "HUMAN_PASS", seat: OBSERVER_SEAT };
     }
 
     return null;
@@ -156,9 +156,9 @@ export function useObserve(options: ObserveOptions = {}) {
             const hand = s.hands[OBSERVER_SEAT];
             const strategy = strategiesRef.current[OBSERVER_SEAT] ?? DIFFICULTY_PRESETS.intermediate;
             const tiles = chooseTilesForCharleston(strategy, hand, s.wall, PATTERNS);
-            action = { type: "HUMAN_STAGE_CHARLESTON", tileIds: tiles.map(t => t.id) };
+            action = { type: "HUMAN_STAGE_CHARLESTON", tileIds: tiles.map(t => t.id), seat: OBSERVER_SEAT };
           } else if (s.pendingAction?.type === "human_charleston_stop") {
-            action = { type: "BEGIN_SECOND_CHARLESTON" };
+            action = { type: "BEGIN_SECOND_CHARLESTON", seat: OBSERVER_SEAT };
           } else if (s.pendingAction?.type === "human_courtesy_propose") {
             action = { type: "HUMAN_COURTESY_RESPOND", count: 0 };
           } else if (s.pendingAction?.type === "human_courtesy_select") {
@@ -177,7 +177,7 @@ export function useObserve(options: ObserveOptions = {}) {
             const choice = strategy.chooseDiscard(hand, evalResult, s.wall, PATTERNS);
             action = { type: "HUMAN_DISCARD", tileId: choice.id };
           } else if (s.pendingAction.type === "claim_window") {
-            action = { type: "HUMAN_PASS" };
+            action = { type: "HUMAN_PASS", seat: OBSERVER_SEAT };
           } else {
             break;
           }
@@ -218,9 +218,9 @@ export function useObserve(options: ObserveOptions = {}) {
           const hand = s.hands[OBSERVER_SEAT];
           const strategy = strategiesRef.current[OBSERVER_SEAT] ?? DIFFICULTY_PRESETS.intermediate;
           const tiles = chooseTilesForCharleston(strategy, hand, s.wall, PATTERNS);
-          s = gameReducer(s, { type: "HUMAN_STAGE_CHARLESTON", tileIds: tiles.map(t => t.id) }, ctx);
+          s = gameReducer(s, { type: "HUMAN_STAGE_CHARLESTON", tileIds: tiles.map(t => t.id), seat: OBSERVER_SEAT }, ctx);
         } else if (s.pendingAction?.type === "human_charleston_stop") {
-          s = gameReducer(s, { type: "BEGIN_SECOND_CHARLESTON" }, ctx);
+          s = gameReducer(s, { type: "BEGIN_SECOND_CHARLESTON", seat: OBSERVER_SEAT }, ctx);
         } else if (s.pendingAction?.type === "human_courtesy_propose") {
           s = gameReducer(s, { type: "HUMAN_COURTESY_RESPOND", count: 0 }, ctx);
         } else if (s.pendingAction?.type === "human_courtesy_select") {
@@ -239,7 +239,7 @@ export function useObserve(options: ObserveOptions = {}) {
           const choice = strategy.chooseDiscard(hand, evalResult, s.wall, PATTERNS);
           s = gameReducer(s, { type: "HUMAN_DISCARD", tileId: choice.id }, ctx);
         } else if (s.pendingAction.type === "claim_window") {
-          s = gameReducer(s, { type: "HUMAN_PASS" }, ctx);
+          s = gameReducer(s, { type: "HUMAN_PASS", seat: OBSERVER_SEAT }, ctx);
         } else {
           break;
         }

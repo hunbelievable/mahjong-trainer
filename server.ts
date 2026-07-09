@@ -18,7 +18,7 @@ import type { Duplex } from "node:stream";
 import { parse } from "node:url";
 import next from "next";
 import { WebSocketServer, type WebSocket } from "ws";
-import { userIdFromCookieHeader } from "./lib/server/sessionFromRequest";
+import { userIdFromRequest } from "./lib/server/accessIdentity";
 import { roomManager } from "./lib/server/roomManager";
 import { wsHub } from "./lib/server/wsHub";
 import { createEventLog } from "./lib/server/eventLog";
@@ -76,7 +76,7 @@ app.prepare().then(async () => {
       return;
     }
 
-    const userId = await userIdFromCookieHeader(req.headers.cookie);
+    const userId = await userIdFromRequest(req);
     if (!userId) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
@@ -104,6 +104,16 @@ app.prepare().then(async () => {
       } catch {
         return;
       }
+
+      // Chat never touches the engine — a separate path from game actions.
+      if (msg && typeof msg === "object" && (msg as Record<string, unknown>).type === "chat") {
+        const text = (msg as Record<string, unknown>).text;
+        if (typeof text !== "string") return;
+        const sent = roomManager.sendChatMessage(roomId, userId, text);
+        if (sent) wsHub.broadcastChat(roomId, sent);
+        return;
+      }
+
       const action = toGameAction(msg);
       if (!action) return;
 

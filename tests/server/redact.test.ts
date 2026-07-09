@@ -33,6 +33,8 @@ function makeState(overrides: Partial<GameState> = {}): GameState {
     turnNumber: 7,
     winner: null,
     winningPattern: null,
+    winKind: null,
+    winDiscardedBy: null,
     pendingAction: { type: "human_discard" },
     log: ["E draws.", "W discards 8c"],
     charleston: null,
@@ -103,13 +105,53 @@ describe("redactStateForSeat", () => {
     expect(redactStateForSeat(state, "E").pendingActionForYou).toBeNull();
   });
 
-  it("addresses a claim window to potential claimers, not the discarder", () => {
+  it("addresses a claim window to eligible seats only, not the discarder or an ineligible seat", () => {
     const discard = mk("cracks", 8, 1);
     const state = makeState({
-      pendingAction: { type: "claim_window", discard, discardedBy: "E", eligibleTypes: ["pung"] },
+      pendingAction: {
+        type: "claim_window",
+        discard,
+        discardedBy: "E",
+        eligibleSeats: { S: ["pung"] },
+        responses: {},
+      },
     });
     expect(redactStateForSeat(state, "E").pendingActionForYou).toBeNull(); // discarder can't claim
-    expect(redactStateForSeat(state, "S").pendingActionForYou).toMatchObject({ type: "claim_window" });
+    expect(redactStateForSeat(state, "W").pendingActionForYou).toBeNull(); // not eligible
+    expect(redactStateForSeat(state, "S").pendingActionForYou).toMatchObject({
+      type: "claim_window",
+      eligibleSeats: { S: ["pung"] },
+    });
+  });
+
+  it("never leaks another seat's claim eligibility into a redacted view", () => {
+    const discard = mk("cracks", 8, 1);
+    const state = makeState({
+      pendingAction: {
+        type: "claim_window",
+        discard,
+        discardedBy: "E",
+        eligibleSeats: { S: ["pung"], N: ["kong"] },
+        responses: {},
+      },
+    });
+    const sView = redactStateForSeat(state, "S").pendingActionForYou;
+    expect(JSON.stringify(sView)).not.toContain("kong"); // N's eligibility must not appear in S's view
+  });
+
+  it("stops addressing a claim window to a seat once they've responded", () => {
+    const discard = mk("cracks", 8, 1);
+    const state = makeState({
+      pendingAction: {
+        type: "claim_window",
+        discard,
+        discardedBy: "E",
+        eligibleSeats: { S: ["pung"], N: ["kong"] },
+        responses: { S: "pass" },
+      },
+    });
+    expect(redactStateForSeat(state, "S").pendingActionForYou).toBeNull(); // already responded
+    expect(redactStateForSeat(state, "N").pendingActionForYou).toMatchObject({ type: "claim_window" });
   });
 
   it("does not mutate the input state", () => {

@@ -32,7 +32,11 @@ services:
     build:
       context: .
       target: builder
-    command: node node_modules/.bin/prisma db push
+    # --accept-data-loss: this deploy drops the Account/Session/VerificationToken
+    # tables (Auth.js-specific, retired in favor of Cloudflare Access identity —
+    # see lib/server/cfAccess.ts). User-confirmed safe: nothing reads those
+    # tables anymore.
+    command: node node_modules/.bin/prisma db push --accept-data-loss
     depends_on:
       postgres:
         condition: service_healthy
@@ -52,15 +56,10 @@ services:
         condition: service_started
     environment:
       DATABASE_URL: postgresql://mahjong:${DB_PASSWORD:-mahjong_dev}@postgres:5432/mahjong_trainer
-      AUTH_SECRET: ${AUTH_SECRET}
-      AUTH_GOOGLE_ID: ${AUTH_GOOGLE_ID}
-      AUTH_GOOGLE_SECRET: ${AUTH_GOOGLE_SECRET}
-      # Auth.js only auto-trusts the incoming Host header on Vercel; every
-      # other deployment (including our custom server.ts) needs this set
-      # explicitly, or every request 500s with "UntrustedHost". Hardcoded
-      # (not ${...}-templated) since it's a fixed property of self-hosting,
-      # not something to configure per-environment.
-      AUTH_TRUST_HOST: "true"
+      # Identity — Cloudflare Access verifies sign-in at the tunnel; the app
+      # only verifies the resulting JWT. See lib/server/cfAccess.ts.
+      CF_ACCESS_TEAM_DOMAIN: ${CF_ACCESS_TEAM_DOMAIN}
+      CF_ACCESS_AUD: ${CF_ACCESS_AUD}
       NATS_URL: nats://nats:4222
     ports:
       - "3000:3000"

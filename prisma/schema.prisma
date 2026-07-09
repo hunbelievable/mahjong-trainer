@@ -56,58 +56,22 @@ model HandPattern {
 }
 
 // =============================================================================
-// Multiplayer — identity (Auth.js) + projections (rooms, matches, scoring).
-// The event log / authoritative state live in NATS + memory; these tables are
-// durable READ MODELS. See docs/multiplayer-design.md §§6, 12, 18.
+// Multiplayer — identity (Cloudflare Access) + projections (rooms, matches,
+// scoring). The Cloudflare Tunnel in front of this app enforces sign-in via a
+// Zero Trust Access application before any request reaches us, so the app
+// itself runs no OAuth flow — it just trusts the Access-verified email (JWT,
+// see lib/server/cfAccess.ts) as user identity and finds-or-creates a User row
+// for it. The event log / authoritative state live in NATS + memory; these
+// tables are durable READ MODELS. See docs/multiplayer-design.md §§6, 12, 18.
 // =============================================================================
 
-// ── Auth.js (NextAuth Prisma adapter — canonical schema) ─────────────────────
-
 model User {
-  id            String        @id @default(cuid())
-  name          String?
-  email         String?       @unique
-  emailVerified DateTime?
-  image         String?
-  createdAt     DateTime      @default(now())
-  accounts      Account[]
-  sessions      Session[]
-  matchPlayers  MatchPlayer[]
-  createdRooms  Room[]
-}
-
-model Account {
-  id                String  @id @default(cuid())
-  userId            String
-  type              String
-  provider          String
-  providerAccountId String
-  refresh_token     String?
-  access_token      String?
-  expires_at        Int?
-  token_type        String?
-  scope             String?
-  id_token          String?
-  session_state     String?
-  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([provider, providerAccountId])
-}
-
-model Session {
-  id           String   @id @default(cuid())
-  sessionToken String   @unique
-  userId       String
-  expires      DateTime
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-}
-
-model VerificationToken {
-  identifier String
-  token      String   @unique
-  expires    DateTime
-
-  @@unique([identifier, token])
+  id           String        @id @default(cuid())
+  email        String        @unique
+  name         String?
+  createdAt    DateTime      @default(now())
+  matchPlayers MatchPlayer[]
+  createdRooms Room[]
 }
 
 // ── Domain projections ───────────────────────────────────────────────────────

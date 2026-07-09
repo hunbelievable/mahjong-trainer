@@ -8,7 +8,7 @@
 // per-connection push logic. See docs/multiplayer-design.md §3.
 // =============================================================================
 
-import { roomManager, type RoomManager } from "./roomManager";
+import { roomManager, type RoomManager, type ChatMessage } from "./roomManager";
 
 /** The minimal socket surface the hub needs — real `ws.WebSocket` satisfies this. */
 export interface HubSocket {
@@ -37,6 +37,10 @@ export class WsHub {
     set.add(conn);
 
     this.pushTo(roomId, conn);
+    const history = this.manager.chatHistory(roomId);
+    if (history.length > 0) {
+      conn.socket.send(JSON.stringify({ type: "chatHistory", messages: history }));
+    }
 
     return () => {
       set!.delete(conn);
@@ -56,6 +60,14 @@ export class WsHub {
     return this.byRoom.get(roomId)?.size ?? 0;
   }
 
+  /** Broadcast one chat message to every connection in a room — same content for everyone, no per-seat redaction needed. */
+  broadcastChat(roomId: string, message: ChatMessage): void {
+    const set = this.byRoom.get(roomId);
+    if (!set) return;
+    const payload = JSON.stringify({ type: "chatMessage", message });
+    for (const conn of Array.from(set)) conn.socket.send(payload);
+  }
+
   private pushTo(roomId: string, conn: Connection): void {
     const room = this.manager.getRoom(roomId);
     if (!room) {
@@ -63,7 +75,14 @@ export class WsHub {
       return;
     }
 
-    if (this.manager.statusOf(room) === "lobby") {
+    const status = this.manager.statusOf(room);
+
+    if (status === "closed") {
+      conn.socket.send(JSON.stringify({ type: "closed" }));
+      return;
+    }
+
+    if (status === "lobby") {
       conn.socket.send(JSON.stringify({ type: "lobby", view: this.manager.lobbyView(roomId, conn.userId) }));
       return;
     }

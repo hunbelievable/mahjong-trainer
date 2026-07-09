@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback, type FormEvent } from "react";
 import TileFace from "@/components/TileFace";
 import HandDisplay from "@/components/HandDisplay";
 import EvalPanel from "@/components/EvalPanel";
@@ -14,7 +14,8 @@ import type { DifficultyLevel, ClaimType } from "@/engine/cpu";
 // Type-only imports from server modules — erased at compile time, so none of
 // their runtime code (Prisma, nats, etc.) ends up in the client bundle.
 import type { PlayerView } from "@/lib/server/redact";
-import type { LobbyView } from "@/lib/server/roomManager";
+import type { LobbyView, ChatMessage } from "@/lib/server/roomManager";
+import type { MatchView } from "@/lib/server/match";
 
 const SEAT_LABELS: Record<PlayerId, string> = { E: "East", S: "South", W: "West", N: "North" };
 const DIFFICULTY_LABELS: Record<DifficultyLevel, string> = {
@@ -33,6 +34,7 @@ type ClientState =
   | { kind: "connecting" }
   | { kind: "lobby"; view: LobbyView }
   | { kind: "game"; view: PlayerView }
+  | { kind: "closed" }
   | { kind: "error"; message: string; retryable: boolean };
 
 const MAX_RETRIES = 5;
@@ -42,6 +44,9 @@ export default function PlayRoomClient({ roomId }: { roomId: string }) {
   const wsRef = useRef<WebSocket | null>(null);
   const retryCountRef = useRef(0);
   const [retryTick, setRetryTick] = useState(0);
+  // Chat runs alongside whatever the main lobby/game state is doing — never
+  // reset by phase transitions, and never persisted server-side.
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,9 +67,15 @@ export default function PlayRoomClient({ roomId }: { roomId: string }) {
           const msg = JSON.parse(ev.data as string) as
             | { type: "lobby"; view: LobbyView }
             | { type: "game"; view: PlayerView }
+            | { type: "closed" }
+            | { type: "chatHistory"; messages: ChatMessage[] }
+            | { type: "chatMessage"; message: ChatMessage }
             | { type: "error"; message: string };
           if (msg.type === "lobby") setState({ kind: "lobby", view: msg.view });
           else if (msg.type === "game") setState({ kind: "game", view: msg.view });
+          else if (msg.type === "closed") setState({ kind: "closed" });
+          else if (msg.type === "chatHistory") setChatMessages(msg.messages);
+          else if (msg.type === "chatMessage") setChatMessages((prev) => [...prev, msg.message]);
           else setState({ kind: "error", message: msg.message, retryable: false });
         } catch {
           // ignore malformed frames
@@ -113,6 +124,10 @@ export default function PlayRoomClient({ roomId }: { roomId: string }) {
     },
     [roomId],
   );
+  const sendNextGame = useCallback(() => sendAction({ action: "nextGame" }), [sendAction]);
+  const sendKick = useCallback((seat: PlayerId) => sendAction({ action: "kickSeat", seat }), [sendAction]);
+  const sendForfeit = useCallback(() => sendAction({ action: "forfeit" }), [sendAction]);
+  const sendCloseRoom = useCallback(() => sendAction({ action: "closeRoom" }), [sendAction]);
 
   const sendWs = useCallback((body: Record<string, unknown>) => {
     wsRef.current?.send(JSON.stringify(body));
@@ -128,6 +143,7 @@ export default function PlayRoomClient({ roomId }: { roomId: string }) {
   const sendCharlestonPass = useCallback((tileIds: string[]) => sendWs({ type: "charlestonPass", tileIds }), [sendWs]);
   const sendCharlestonStop = useCallback(() => sendWs({ type: "charlestonStop" }), [sendWs]);
   const sendCharlestonBeginSecond = useCallback(() => sendWs({ type: "charlestonBeginSecond" }), [sendWs]);
+  const sendChat = useCallback((text: string) => sendWs({ type: "chat", text }), [sendWs]);
 
   const manualRetry = () => {
     retryCountRef.current = 0;
@@ -155,7 +171,16 @@ export default function PlayRoomClient({ roomId }: { roomId: string }) {
           </div>
         )}
 
-        {state.kind === "lobby" && <LobbyPanel roomId={roomId} view={state.view} onAction={sendAction} />}
+        {state.kind === "closed" && (
+          <div className="bg-white rounded-xl border border-gray-200 p-6 text-center space-y-2">
+            <p className="text-sm font-semibold text-gray-700">This room has been closed.</p>
+            <p className="text-xs text-gray-500">The host ended the match. Start or join a different room to keep playing.</p>
+          </div>
+        )}
+
+        {state.kind === "lobby" && (
+          <LobbyPanel roomId={roomId} view={state.view} onAction={sendAction} onCloseRoom={sendCloseRoom} />
+        )}
         {state.kind === "game" && state.view.phase === "charleston" && (
           <CharlestonPanel
             roomId={roomId}
@@ -173,6 +198,18 @@ export default function PlayRoomClient({ roomId }: { roomId: string }) {
             onClaim={sendClaim}
             onPass={sendPass}
             onJokerSwap={sendJokerSwap}
+            onNextGame={sendNextGame}
+            onKick={sendKick}
+            onForfeit={sendForfeit}
+            onCloseRoom={sendCloseRoom}
+          />
+        )}
+
+        {(state.kind === "lobby" || state.kind === "game") && (
+          <ChatPanel
+            messages={chatMessages}
+            yourSeat={state.kind === "lobby" ? state.view.yourSeat : state.view.you}
+            onSend={sendChat}
           />
         )}
       </div>
@@ -188,11 +225,18 @@ function LobbyPanel({
   roomId,
   view,
   onAction,
+  onCloseRoom,
 }: {
   roomId: string;
   view: LobbyView;
   onAction: (body: Record<string, unknown>) => void;
+  onCloseRoom: () => void;
 }) {
+  const handleClose = () => {
+    if (window.confirm("Close this room? This can't be undone — you'd need to start a new one.")) {
+      onCloseRoom();
+    }
+  };
   return (
     <div className="space-y-5">
       <div className="text-center">
@@ -263,6 +307,15 @@ function LobbyPanel({
       >
         Start game
       </button>
+
+      {view.isRoomCreator && (
+        <button
+          onClick={handleClose}
+          className="w-full py-1.5 text-xs text-rose-500 hover:text-rose-700 font-semibold transition-colors"
+        >
+          Close room
+        </button>
+      )}
     </div>
   );
 }
@@ -303,17 +356,31 @@ function CharlestonPanel({
     });
   };
 
+  // Real-name-free, safe to show in full — reveals only who hasn't acted yet
+  // this step, never hand contents (see PlayerView.charlestonWaitingOn).
+  const othersWaiting = view.charlestonWaitingOn.filter((s) => s !== view.you);
+  const waitingBanner = othersWaiting.length > 0 && (
+    <p className="text-xs text-amber-600 font-medium">
+      Waiting on: {othersWaiting.map((s) => SEAT_LABELS[s]).join(", ")}
+    </p>
+  );
+
   if (!isPass && !isStop) {
     // Waiting on someone else's Charleston step — nothing for this seat to do yet.
     return (
-      <div className="text-center text-sm text-gray-400 py-16">
-        Charleston in progress — waiting on the other players…
+      <div className="text-center py-16 space-y-2">
+        <p className="text-sm text-gray-400">Charleston in progress…</p>
+        {othersWaiting.length > 0 && (
+          <p className="text-sm text-amber-600 font-medium">
+            Waiting on: {othersWaiting.map((s) => SEAT_LABELS[s]).join(", ")}
+          </p>
+        )}
       </div>
     );
   }
 
   if (isStop) {
-    const cpuVotes = pa.cpuVotes;
+    const cpuVotes = pa.votes;
     const others = SEAT_ORDER.filter((s) => s !== view.you);
     return (
       <div className="space-y-4">
@@ -327,7 +394,9 @@ function CharlestonPanel({
             {others.map((seat) => (
               <div key={seat} className="ml-2">
                 • {SEAT_LABELS[seat]}:{" "}
-                {cpuVotes[seat] ? (
+                {cpuVotes[seat] === undefined ? (
+                  <span className="text-gray-500 font-semibold">still deciding…</span>
+                ) : cpuVotes[seat] ? (
                   <span className="text-rose-700 font-semibold">votes to skip</span>
                 ) : (
                   <span className="text-violet-700 font-semibold">wants to play</span>
@@ -370,6 +439,7 @@ function CharlestonPanel({
             {stepInfo?.label ?? ""} — passing to <span className="text-violet-700">{passingTo}</span>
           </h2>
           <p className="text-xs text-gray-500 mt-0.5">Select exactly 3 tiles to pass. You cannot pass jokers.</p>
+          {waitingBanner}
         </div>
 
         <div className="flex flex-wrap gap-2">
@@ -440,6 +510,10 @@ function GamePanel({
   onClaim,
   onPass,
   onJokerSwap,
+  onNextGame,
+  onKick,
+  onForfeit,
+  onCloseRoom,
 }: {
   roomId: string;
   view: PlayerView;
@@ -447,10 +521,16 @@ function GamePanel({
   onClaim: (claimType: ClaimType) => void;
   onPass: () => void;
   onJokerSwap: (meldOwnerSeat: PlayerId, meldIndex: number, jokerTileId: string, handTileId: string) => void;
+  onNextGame: () => void;
+  onKick: (seat: PlayerId) => void;
+  onForfeit: () => void;
+  onCloseRoom: () => void;
 }) {
   const canDiscard = view.pendingActionForYou?.type === "human_discard";
-  const claimWindow =
-    view.pendingActionForYou?.type === "claim_window" ? view.pendingActionForYou : null;
+  const pendingClaim = view.pendingActionForYou?.type === "claim_window" ? view.pendingActionForYou : null;
+  const claimWindow = pendingClaim
+    ? { ...pendingClaim, eligibleTypes: pendingClaim.eligibleSeats[view.you] ?? [] }
+    : null;
 
   const [sorted, setSorted] = useState(true);
   /** When on, hand tiles can be dragged to rearrange and discarding is disabled. */
@@ -516,11 +596,16 @@ function GamePanel({
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
       <div className="lg:col-span-2 space-y-5">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-2">
           <h1 className="text-lg font-bold text-gray-900">Room {roomId}</h1>
-          <span className="text-xs text-gray-500">
-            Turn {view.turnNumber} · {SEAT_LABELS[view.currentSeat]}
-            {view.currentSeat === view.you ? " (you)" : ""}
+          <span
+            className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
+              view.currentSeat === view.you
+                ? "bg-indigo-600 text-white animate-pulse"
+                : "bg-gray-100 text-gray-500"
+            }`}
+          >
+            Turn {view.turnNumber} · {view.currentSeat === view.you ? "Your turn" : `${SEAT_LABELS[view.currentSeat]}'s turn`}
           </span>
         </div>
 
@@ -546,6 +631,12 @@ function GamePanel({
               <TileFace suit={claimWindow.discard.suit} val={claimWindow.discard.val} size="xs" />
               <span>— claim it?</span>
             </div>
+            {view.claimPendingCount > 1 && (
+              <p className="text-xs text-amber-600 font-medium mb-2">
+                {view.claimPendingCount - 1} other player{view.claimPendingCount - 1 === 1 ? "" : "s"} also deciding —
+                mahjong wins outright; otherwise the strongest claim (and closest seat, on a tie) wins once everyone's answered.
+              </p>
+            )}
             <div className="flex gap-2 flex-wrap">
               {claimWindow.eligibleTypes.map((ct) => (
                 <button
@@ -734,10 +825,194 @@ function GamePanel({
           from the redacted view via an "unseen pool" model (see lib/unseenPool.ts)
           so it never sees more than a real player watching the table would. */}
       <div className="space-y-4">
+        {view.match && (
+          <StandingsPanel
+            match={view.match}
+            you={view.you}
+            onNextGame={onNextGame}
+            onKick={onKick}
+            onForfeit={onForfeit}
+            onCloseRoom={onCloseRoom}
+          />
+        )}
         <h2 className="text-sm font-bold text-gray-700 uppercase tracking-wide">Pattern Alignment</h2>
         <EvalPanel result={evalResult} handSize={fullHandForEval.length} />
         <PatternTracker hand={fullHandForEval} evalResult={evalResult} />
       </div>
+    </div>
+  );
+}
+
+// =============================================================================
+// Match standings
+// =============================================================================
+
+function StandingsPanel({
+  match,
+  you,
+  onNextGame,
+  onKick,
+  onForfeit,
+  onCloseRoom,
+}: {
+  match: MatchView;
+  you: PlayerId;
+  onNextGame: () => void;
+  onKick: (seat: PlayerId) => void;
+  onForfeit: () => void;
+  onCloseRoom: () => void;
+}) {
+  const handleKick = (seat: PlayerId) => {
+    if (window.confirm(`Kick ${SEAT_LABELS[seat]}? A CPU takes over for the rest of the match — this can't be undone.`)) {
+      onKick(seat);
+    }
+  };
+  const handleForfeit = () => {
+    if (window.confirm("Forfeit your seat? A CPU takes over for the rest of the match — this can't be undone.")) {
+      onForfeit();
+    }
+  };
+  const handleClose = () => {
+    if (window.confirm("Close this room? The current game is abandoned and the room ends for everyone — this can't be undone.")) {
+      onCloseRoom();
+    }
+  };
+
+  return (
+    <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-bold text-gray-700 uppercase tracking-wide">Standings</h2>
+        <span className="text-xs text-gray-400">Game {match.gameNumber}</span>
+      </div>
+      <div className="space-y-1.5">
+        {match.players.map((p) => (
+          <div key={p.seat} className="flex items-center justify-between gap-2 text-sm">
+            <span className="flex items-center gap-1.5 min-w-0">
+              <span className={`font-semibold ${p.seat === you ? "text-indigo-700" : "text-gray-700"}`}>
+                {SEAT_LABELS[p.seat]}
+              </span>
+              {p.seat === match.dealerSeat && (
+                <span className="text-[10px] font-semibold text-amber-700 bg-amber-100 border border-amber-300 rounded px-1 py-0.5 shrink-0">
+                  Dealer
+                </span>
+              )}
+              <span className="text-xs text-gray-400 truncate">
+                {p.isYou ? "(you)" : p.kind === "cpu" ? `CPU · ${DIFFICULTY_LABELS[p.difficulty!]}` : ""}
+              </span>
+            </span>
+            <span className="flex items-center gap-2 shrink-0">
+              {p.kind === "human" && p.isYou && (
+                <button
+                  onClick={handleForfeit}
+                  className="text-[10px] px-1.5 py-0.5 rounded border border-rose-300 text-rose-600 hover:bg-rose-50 font-semibold transition-colors"
+                  title="Hand your seat to a CPU for the rest of the match"
+                >
+                  Forfeit
+                </button>
+              )}
+              {p.kind === "human" && !p.isYou && match.isRoomCreator && (
+                <button
+                  onClick={() => handleKick(p.seat)}
+                  className="text-[10px] px-1.5 py-0.5 rounded border border-rose-300 text-rose-600 hover:bg-rose-50 font-semibold transition-colors"
+                  title="Replace this player with a CPU for the rest of the match"
+                >
+                  Kick
+                </button>
+              )}
+              <span
+                className={`font-mono font-semibold ${
+                  p.score > 0 ? "text-emerald-600" : p.score < 0 ? "text-rose-600" : "text-gray-400"
+                }`}
+              >
+                {p.score > 0 ? "+" : ""}
+                {p.score}
+              </span>
+            </span>
+          </div>
+        ))}
+      </div>
+      {match.canStartNextGame && (
+        <button
+          onClick={onNextGame}
+          className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm rounded-lg transition-colors"
+        >
+          Next game →
+        </button>
+      )}
+      {match.isRoomCreator && (
+        <button
+          onClick={handleClose}
+          className="w-full py-1.5 text-xs text-rose-500 hover:text-rose-700 font-semibold transition-colors"
+        >
+          Close room
+        </button>
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
+// Chat — in-room only, no moderation, never persisted (see lib/server/roomManager.ts).
+// Messages are attributed by physical seat, not name/email.
+// =============================================================================
+
+function ChatPanel({
+  messages,
+  yourSeat,
+  onSend,
+}: {
+  messages: ChatMessage[];
+  yourSeat: PlayerId | null;
+  onSend: (text: string) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const listRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
+  }, [messages]);
+
+  const handleSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    const text = draft.trim();
+    if (!text) return;
+    onSend(text);
+    setDraft("");
+  };
+
+  if (!yourSeat) return null; // spectators (unseated lobby visitors) don't get a chat box
+
+  return (
+    <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-2 mt-5">
+      <h2 className="text-sm font-bold text-gray-700 uppercase tracking-wide">Table Chat</h2>
+      <div ref={listRef} className="h-32 overflow-y-auto space-y-1 text-sm bg-gray-50 rounded p-2">
+        {messages.length === 0 && <p className="text-xs text-gray-400 italic">No messages yet.</p>}
+        {messages.map((m, i) => (
+          <div key={i}>
+            <span className={`font-semibold ${m.seat === yourSeat ? "text-indigo-700" : "text-gray-700"}`}>
+              {SEAT_LABELS[m.seat]}:
+            </span>{" "}
+            <span className="text-gray-800 break-words">{m.text}</span>
+          </div>
+        ))}
+      </div>
+      <form onSubmit={handleSubmit} className="flex gap-2">
+        <input
+          type="text"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="Say something to the table…"
+          maxLength={500}
+          className="flex-1 text-sm border border-gray-300 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+        />
+        <button
+          type="submit"
+          disabled={!draft.trim()}
+          className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white text-sm font-semibold rounded transition-colors"
+        >
+          Send
+        </button>
+      </form>
     </div>
   );
 }

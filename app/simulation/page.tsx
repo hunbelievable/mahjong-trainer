@@ -248,7 +248,7 @@ export default function SimulationPage() {
   };
 
   const claimWindow = state.pendingAction?.type === "claim_window"
-    ? state.pendingAction
+    ? { ...state.pendingAction, eligibleTypes: state.pendingAction.eligibleSeats[humanSeat] ?? [] }
     : null;
 
   const isHumanTurn = state.pendingAction?.type === "human_discard";
@@ -420,7 +420,7 @@ export default function SimulationPage() {
 
                 {/* Stop / Continue vote */}
                 {isCharlestonStop && state.pendingAction?.type === "human_charleston_stop" && (() => {
-                  const cpuVotes = state.pendingAction.cpuVotes;
+                  const cpuVotes = state.pendingAction.votes;
                   const anyCpuSkips = cpuSeats.some(s => cpuVotes[s]);
                   return (
                     <div className="bg-amber-50 border border-amber-300 rounded-lg p-4 space-y-3">

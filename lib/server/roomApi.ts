@@ -20,7 +20,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { parse } from "node:url";
-import { userIdFromCookieHeader } from "./sessionFromRequest";
+import { userIdFromRequest } from "./accessIdentity";
 import { roomManager } from "./roomManager";
 import { wsHub } from "./wsHub";
 import type { PlayerId } from "@/engine/tiles";
@@ -49,7 +49,7 @@ function readJsonBody(req: IncomingMessage): Promise<unknown> {
 }
 
 interface ActionBody {
-  action: "claimSeat" | "releaseSeat" | "setCpu" | "start";
+  action: "claimSeat" | "releaseSeat" | "setCpu" | "start" | "nextGame" | "kickSeat" | "forfeit" | "closeRoom";
   seat?: PlayerId;
   difficulty?: DifficultyLevel;
 }
@@ -64,12 +64,12 @@ export async function handleRoomApi(req: IncomingMessage, res: ServerResponse): 
   if (!pathname || !pathname.startsWith("/api/rooms")) return false;
 
   const segments = pathname.split("/").filter(Boolean); // ["api", "rooms", ...]
-  const userId = await userIdFromCookieHeader(req.headers.cookie);
+  const userId = await userIdFromRequest(req);
 
   // POST /api/rooms — create a room
   if (segments.length === 2 && req.method === "POST") {
     if (!userId) { sendJson(res, 401, { error: "unauthorized" }); return true; }
-    const room = roomManager.createRoom();
+    const room = roomManager.createRoom(userId);
     sendJson(res, 200, { roomId: room.id });
     return true;
   }
@@ -80,7 +80,12 @@ export async function handleRoomApi(req: IncomingMessage, res: ServerResponse): 
     const id = segments[2];
     const room = roomManager.getRoom(id);
     if (!room) { sendJson(res, 404, { error: "not found" }); return true; }
-    if (roomManager.statusOf(room) === "lobby") {
+    const status = roomManager.statusOf(room);
+    if (status === "closed") {
+      sendJson(res, 200, { type: "closed" });
+      return true;
+    }
+    if (status === "lobby") {
       sendJson(res, 200, { type: "lobby", view: roomManager.lobbyView(id, userId) });
       return true;
     }
@@ -121,6 +126,19 @@ export async function handleRoomApi(req: IncomingMessage, res: ServerResponse): 
         break;
       case "start":
         ok = roomManager.start(id);
+        break;
+      case "nextGame":
+        ok = roomManager.startNextGame(id, userId);
+        break;
+      case "kickSeat":
+        if (!body.seat) { sendJson(res, 400, { error: "seat required" }); return true; }
+        ok = roomManager.kickSeat(id, userId, body.seat);
+        break;
+      case "forfeit":
+        ok = roomManager.forfeitSeat(id, userId);
+        break;
+      case "closeRoom":
+        ok = roomManager.closeRoom(id, userId);
         break;
       default:
         sendJson(res, 400, { error: "unknown action" });

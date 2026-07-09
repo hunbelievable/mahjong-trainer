@@ -92,28 +92,28 @@ export function useSimulation(options: SimulationOptions = {}) {
   }, [dispatch]);
 
   const claim = useCallback((claimType: ClaimType) => {
-    dispatch({ type: "HUMAN_CLAIM", claimType });
-  }, [dispatch]);
+    dispatch({ type: "HUMAN_CLAIM", claimType, seat: humanSeat });
+  }, [dispatch, humanSeat]);
 
   const pass = useCallback(() => {
-    dispatch({ type: "HUMAN_PASS" });
-  }, [dispatch]);
+    dispatch({ type: "HUMAN_PASS", seat: humanSeat });
+  }, [dispatch, humanSeat]);
 
   const reset = useCallback(() => {
     dispatch({ type: "RESET" });
   }, [dispatch]);
 
   const stageCharleston = useCallback((tileIds: string[]) => {
-    dispatch({ type: "HUMAN_STAGE_CHARLESTON", tileIds });
-  }, [dispatch]);
+    dispatch({ type: "HUMAN_STAGE_CHARLESTON", tileIds, seat: humanSeat });
+  }, [dispatch, humanSeat]);
 
   const stopCharleston = useCallback(() => {
-    dispatch({ type: "STOP_CHARLESTON" });
-  }, [dispatch]);
+    dispatch({ type: "STOP_CHARLESTON", seat: humanSeat });
+  }, [dispatch, humanSeat]);
 
   const beginSecondCharleston = useCallback(() => {
-    dispatch({ type: "BEGIN_SECOND_CHARLESTON" });
-  }, [dispatch]);
+    dispatch({ type: "BEGIN_SECOND_CHARLESTON", seat: humanSeat });
+  }, [dispatch, humanSeat]);
 
   const respondCourtesy = useCallback((count: number) => {
     dispatch({ type: "HUMAN_COURTESY_RESPOND", count });

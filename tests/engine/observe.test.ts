@@ -41,10 +41,10 @@ function runFullGame(ctx: EngineContext): GameState {
     } else {
       switch (pending.type) {
         case "human_charleston_pass":
-          state = gameReducer(state, { type: "HUMAN_STAGE_CHARLESTON", tileIds: firstNonJokerIds(3) }, ctx);
+          state = gameReducer(state, { type: "HUMAN_STAGE_CHARLESTON", tileIds: firstNonJokerIds(3), seat: ctx.humanSeat }, ctx);
           break;
         case "human_charleston_stop":
-          state = gameReducer(state, { type: "STOP_CHARLESTON" }, ctx);
+          state = gameReducer(state, { type: "STOP_CHARLESTON", seat: ctx.humanSeat }, ctx);
           break;
         case "human_courtesy_propose":
           state = gameReducer(state, { type: "HUMAN_COURTESY_RESPOND", count: 0 }, ctx);
@@ -62,7 +62,7 @@ function runFullGame(ctx: EngineContext): GameState {
           break;
         }
         case "claim_window":
-          state = gameReducer(state, { type: "HUMAN_PASS" }, ctx);
+          state = gameReducer(state, { type: "HUMAN_PASS", seat: ctx.humanSeat }, ctx);
           break;
         default:
           return state; // unknown pending action — stop rather than spin

@@ -42,13 +42,25 @@ export type PendingAction =
       type: "claim_window";
       discard: Tile;
       discardedBy: PlayerId;
-      eligibleTypes: ClaimType[]; // types the human CAN claim (mahjong first)
+      /**
+       * Every human seat (other than the discarder) eligible to claim, and
+       * what they can claim. In a redacted PlayerView this only ever contains
+       * the viewer's own entry (leaking another seat's eligibility would leak
+       * hand info — see lib/server/redact.ts).
+       */
+      eligibleSeats: Partial<Record<PlayerId, ClaimType[]>>;
+      /** Responses collected so far from eligible seats. Empty in a redacted view. */
+      responses: Partial<Record<PlayerId, ClaimType | "pass">>;
     }
   | { type: "human_charleston_pass"; step: number }
   | {
       type: "human_charleston_stop";
-      /** CPU votes so the UI can show how each opponent voted. true = wants to stop. */
-      cpuVotes: Record<PlayerId, boolean>;
+      /**
+       * Votes so far: CPU seats are pre-filled when this pauses, human seats
+       * are added as each one votes. true = wants to stop (skip the Second
+       * Charleston). Safe to share in full — a vote reveals no hand info.
+       */
+      votes: Partial<Record<PlayerId, boolean>>;
     }
   | {
       /** After Second Charleston: the across-CPU has proposed a courtesy count; human responds. */
@@ -136,6 +148,10 @@ export interface GameState {
   turnNumber: number;
   winner: PlayerId | null;
   winningPattern: HandPattern | null;
+  /** How the win happened — null until a winner is set. Drives multiplayer scoring (see lib/server/match.ts). */
+  winKind: "discard" | "self_draw" | null;
+  /** The seat whose discard was claimed for mahjong, when winKind is "discard". */
+  winDiscardedBy: PlayerId | null;
   pendingAction: PendingAction;
   log: string[];              // human-readable event log for the UI
   charleston: CharlestonState | null;
@@ -151,11 +167,11 @@ export interface GameState {
 export type GameAction =
   | { type: "START_GAME"; humanSeat?: PlayerId; strategies?: SeatStrategies }
   | { type: "HUMAN_DISCARD"; tileId: string }
-  | { type: "HUMAN_CLAIM"; claimType: ClaimType }
-  | { type: "HUMAN_PASS" }
-  | { type: "HUMAN_STAGE_CHARLESTON"; tileIds: string[] }
-  | { type: "STOP_CHARLESTON" }
-  | { type: "BEGIN_SECOND_CHARLESTON" }
+  | { type: "HUMAN_CLAIM"; claimType: ClaimType; seat?: PlayerId }
+  | { type: "HUMAN_PASS"; seat?: PlayerId }
+  | { type: "HUMAN_STAGE_CHARLESTON"; tileIds: string[]; seat?: PlayerId }
+  | { type: "STOP_CHARLESTON"; seat?: PlayerId }
+  | { type: "BEGIN_SECOND_CHARLESTON"; seat?: PlayerId }
   | { type: "HUMAN_COURTESY_RESPOND"; count: number }
   | { type: "HUMAN_COURTESY_PASS"; tileIds: string[] }
   | {
@@ -169,7 +185,19 @@ export type GameAction =
   | { type: "ADVANCE_CPU" }  // caller triggers each CPU step (enables animation pacing)
   | { type: "RUN_TO_COMPLETION" }  // runs entire game synchronously in one reducer call
   | { type: "SET_STATE"; state: GameState }  // replace state directly (used by ludicrous step-loop)
-  | { type: "RESET" };
+  | { type: "RESET" }
+  | {
+      /**
+       * A seat has just been removed from ctx.humanSeats (kicked or forfeited —
+       * see lib/server/gameRoom.ts's convertSeatToCpu) and any obligation it
+       * still owed the game needs resolving with a synthesized CPU decision so
+       * the room isn't left permanently stalled waiting on someone who can no
+       * longer submit(). Courtesy pass needs no case: GameRoom's drive() always
+       * auto-declines it regardless of humanSeats, so it's never left pending.
+       */
+      type: "CONVERT_TO_CPU";
+      seat: PlayerId;
+    };
 
 // =============================================================================
 // Helpers
@@ -270,6 +298,8 @@ export function createGameState(): GameState {
     turnNumber: 0,
     winner: null,
     winningPattern: null,
+    winKind: null,
+    winDiscardedBy: null,
     pendingAction: null,
     log: [],
     charleston: null,
@@ -326,112 +356,54 @@ export function gameReducer(
 
       // CPUs immediately stage their tiles for step 0
       newState = cpuStageCharleston(newState, ctx, 0);
+      newState = { ...newState, pendingAction: { type: "human_charleston_pass", step: 0 } };
 
-      return {
-        ...newState,
-        pendingAction: { type: "human_charleston_pass", step: 0 },
-      };
+      // If there's no real human to wait for (all-CPU room), this resolves the
+      // whole Charleston synchronously right here.
+      return maybeAdvanceCharleston(newState, ctx);
     }
 
     // ── HUMAN_STAGE_CHARLESTON ─────────────────────────────────────────────
+    // A staging barrier: every human seat must stage before the step executes.
+    // CPU seats already staged immediately when this step opened.
     case "HUMAN_STAGE_CHARLESTON": {
       if (state.pendingAction?.type !== "human_charleston_pass") return state;
       if (!state.charleston) return state;
 
-      const { tileIds } = action;
+      const { tileIds, seat } = action;
+      if (!seat || !ctx.humanSeats.has(seat)) return state;
+      if (state.charleston.staged[seat]) return state; // already staged this step
       if (tileIds.length !== 3) return state;
 
-      const humanHand = state.hands[ctx.humanSeat];
-      const tiles = tileIds.map(id => humanHand.find(t => t.id === id)).filter(Boolean) as Tile[];
+      const hand = state.hands[seat];
+      const tiles = tileIds.map(id => hand.find(t => t.id === id)).filter(Boolean) as Tile[];
       if (tiles.length !== 3) return state;
       if (tiles.some(t => t.suit === "joker")) return state;
 
-      const step = state.charleston.step;
-      const stagedWithHuman: CharlestonState = {
-        ...state.charleston,
-        staged: { ...state.charleston.staged, [ctx.humanSeat]: tileIds },
-      };
-
-      // Execute the exchange
-      let newState = executeCharleston({ ...state, charleston: stagedWithHuman }, step);
-      const nextStep = step + 1;
-
-      // After First Charleston (steps 0–2): vote on whether to play the Second.
-      // NMJL rule: Second Charleston is *skipped* only if ALL four players agree to
-      // skip. If any player wants to play it, it happens.
-      if (nextStep === 3) {
-        const cpuSeats = SEAT_ORDER.filter(s => s !== ctx.humanSeat);
-        const cpuVotes: Record<PlayerId, boolean> = { E: false, S: false, W: false, N: false };
-        for (const seat of cpuSeats) {
-          const strategy = ctx.strategies[seat] ?? DIFFICULTY_PRESETS.intermediate;
-          cpuVotes[seat] = shouldStopCharleston(strategy, newState.hands[seat], newState.wall, ctx.patterns);
-        }
-
-        return {
-          ...newState,
-          charleston: { ...newState.charleston!, step: nextStep, staged: {} },
-          pendingAction: { type: "human_charleston_stop", cpuVotes },
-        };
-      }
-
-      // After all 6 steps — Second Charleston was played, so begin courtesy phase
-      if (nextStep > 5) {
-        return startCourtesyOrFinish(
-          addLog(newState.log, "Charleston complete."),
-          newState,
-          ctx,
-          /* hadSecond */ true
-        );
-      }
-
-      // Advance to next step: CPUs stage, then wait for human
-      newState = { ...newState, charleston: { ...newState.charleston!, step: nextStep, staged: {} } };
-      newState = cpuStageCharleston(newState, ctx, nextStep);
-      return {
-        ...newState,
-        pendingAction: { type: "human_charleston_pass", step: nextStep },
-      };
+      const staged = { ...state.charleston.staged, [seat]: tileIds };
+      return maybeAdvanceCharleston({ ...state, charleston: { ...state.charleston, staged } }, ctx);
     }
 
-    // ── STOP_CHARLESTON ───────────────────────────────────────────────────
-    // Any single vote to skip ends the Second Charleston (common house rule).
+    // ── STOP_CHARLESTON / BEGIN_SECOND_CHARLESTON ──────────────────────────
+    // Each human seat casts one vote. Second Charleston is skipped if ANY seat
+    // (human or CPU) votes to stop — it plays only if every seat wants to.
+    // A decisive stop vote resolves immediately without waiting for the rest.
     case "STOP_CHARLESTON": {
       if (state.pendingAction?.type !== "human_charleston_stop") return state;
-      return startCourtesyOrFinish(
-        addLog(state.log, `${ctx.humanSeat} votes to skip — Second Charleston ends.`),
-        state,
-        ctx,
-        /* hadSecond */ false
-      );
+      const pa = state.pendingAction;
+      const seat = action.seat;
+      if (!seat || !ctx.humanSeats.has(seat) || pa.votes[seat] !== undefined) return state;
+      const votes = { ...pa.votes, [seat]: true };
+      return maybeResolveCharlestonVote({ ...state, pendingAction: { ...pa, votes } }, ctx);
     }
 
-    // ── BEGIN_SECOND_CHARLESTON ───────────────────────────────────────────
-    // Honored only if no CPU has already voted to skip. If any CPU wants to skip,
-    // the Second Charleston is canceled even when the human wants to play.
     case "BEGIN_SECOND_CHARLESTON": {
       if (state.pendingAction?.type !== "human_charleston_stop") return state;
-      const { cpuVotes } = state.pendingAction;
-      const cpuStopper = SEAT_ORDER
-        .filter(s => s !== ctx.humanSeat)
-        .find(s => cpuVotes[s]);
-      if (cpuStopper) {
-        return startCourtesyOrFinish(
-          addLog(state.log, `${cpuStopper} votes to skip — Second Charleston ends.`),
-          state,
-          ctx,
-          /* hadSecond */ false
-        );
-      }
-      let newState: GameState = {
-        ...state,
-        charleston: { ...state.charleston!, step: 3, staged: {} },
-        log: addLog(state.log, "Second Charleston begins."),
-      };
-      newState = cpuStageCharleston(newState, ctx, 3);
-      return {
-        ...newState,
-        pendingAction: { type: "human_charleston_pass", step: 3 },
-      };
+      const pa = state.pendingAction;
+      const seat = action.seat;
+      if (!seat || !ctx.humanSeats.has(seat) || pa.votes[seat] !== undefined) return state;
+      const votes = { ...pa.votes, [seat]: false };
+      return maybeResolveCharlestonVote({ ...state, pendingAction: { ...pa, votes } }, ctx);
     }
 
     // ── HUMAN_COURTESY_RESPOND ─────────────────────────────────────────────
@@ -504,13 +476,13 @@ export function gameReducer(
     }
 
     // ── HUMAN_JOKER_SWAP ───────────────────────────────────────────────────
-    // Swap a natural tile from the human's hand for a joker in any exposed meld.
-    // Legal only while the human is between draw/claim and discard (pendingAction === human_discard).
+    // Swap a natural tile from the acting seat's hand for a joker in any
+    // exposed meld. Legal only on that seat's own turn (pendingAction === human_discard).
     case "HUMAN_JOKER_SWAP": {
       if (state.pendingAction?.type !== "human_discard") return state;
       const swap = validateJokerSwap(
         state,
-        ctx.humanSeat,
+        state.currentSeat,
         action.meldOwnerSeat,
         action.meldIndex,
         action.jokerTileId,
@@ -521,32 +493,35 @@ export function gameReducer(
     }
 
     // ── HUMAN_CLAIM ───────────────────────────────────────────────────────────
+    // A claim window is a bounded race: every eligible human seat must respond
+    // (claim or pass) before it resolves — EXCEPT mahjong, which beats every
+    // other possible claim and so resolves immediately without waiting.
     case "HUMAN_CLAIM": {
       if (state.pendingAction?.type !== "claim_window") return state;
-      const { discard, discardedBy } = state.pendingAction;
+      const pa = state.pendingAction;
+      const seat = action.seat;
+      if (!seat) return state;
+      const eligible = pa.eligibleSeats[seat];
+      if (!eligible || pa.responses[seat] !== undefined) return state;
+      if (!eligible.includes(action.claimType)) return state;
 
       if (action.claimType === "mahjong") {
-        const hand = state.hands[ctx.humanSeat];
-        return {
-          ...state,
-          winner: ctx.humanSeat,
-          winningPattern: evaluateHand([...hand, discard], state.wall, ctx.patterns).bestPatterns[0]?.pattern ?? null,
-          phase: "finished",
-          pendingAction: null,
-          log: addLog(state.log, `${ctx.humanSeat} declares MAHJONG!`),
-        };
+        return applyMahjongWin(state, ctx, seat, [...state.hands[seat], pa.discard], "discard", pa.discardedBy);
       }
 
-      return processClaim(state, ctx, ctx.humanSeat, discard, discardedBy, action.claimType);
+      const responses = { ...pa.responses, [seat]: action.claimType };
+      return maybeResolveClaimWindow({ ...state, pendingAction: { ...pa, responses } }, ctx);
     }
 
     // ── HUMAN_PASS ────────────────────────────────────────────────────────────
     case "HUMAN_PASS": {
       if (state.pendingAction?.type !== "claim_window") return state;
-      const { discard, discardedBy } = state.pendingAction;
+      const pa = state.pendingAction;
+      const seat = action.seat;
+      if (!seat || pa.eligibleSeats[seat] === undefined || pa.responses[seat] !== undefined) return state;
 
-      // Human passes — check if any CPU wants to claim
-      return resolveCpuClaims(state, ctx, discard, discardedBy, ctx.humanSeat);
+      const responses = { ...pa.responses, [seat]: "pass" as const };
+      return maybeResolveClaimWindow({ ...state, pendingAction: { ...pa, responses } }, ctx);
     }
 
     // ── ADVANCE_CPU ───────────────────────────────────────────────────────────
@@ -570,9 +545,9 @@ export function gameReducer(
             const hand = s.hands[ctx.humanSeat];
             const strategy = ctx.strategies[ctx.humanSeat] ?? DIFFICULTY_PRESETS.intermediate;
             const tiles = chooseTilesForCharleston(strategy, hand, s.wall, ctx.patterns);
-            s = gameReducer(s, { type: "HUMAN_STAGE_CHARLESTON", tileIds: tiles.map(t => t.id) }, ctx);
+            s = gameReducer(s, { type: "HUMAN_STAGE_CHARLESTON", tileIds: tiles.map(t => t.id), seat: ctx.humanSeat }, ctx);
           } else if (s.pendingAction?.type === "human_charleston_stop") {
-            s = gameReducer(s, { type: "BEGIN_SECOND_CHARLESTON" }, ctx);
+            s = gameReducer(s, { type: "BEGIN_SECOND_CHARLESTON", seat: ctx.humanSeat }, ctx);
           } else {
             break;
           }
@@ -587,13 +562,53 @@ export function gameReducer(
             const choice = strategy.chooseDiscard(hand, evalResult, s.wall, ctx.patterns);
             s = gameReducer(s, { type: "HUMAN_DISCARD", tileId: choice.id }, ctx);
           } else if (s.pendingAction.type === "claim_window") {
-            s = gameReducer(s, { type: "HUMAN_PASS" }, ctx);
+            s = gameReducer(s, { type: "HUMAN_PASS", seat: ctx.humanSeat }, ctx);
           } else {
             break;
           }
         }
       }
       return s;
+    }
+
+    // ── CONVERT_TO_CPU ──────────────────────────────────────────────────────
+    case "CONVERT_TO_CPU": {
+      const { seat } = action;
+      const pa = state.pendingAction;
+
+      if (state.phase === "charleston" && state.charleston) {
+        if (pa?.type === "human_charleston_pass" && !state.charleston.staged[seat]) {
+          const strategy = ctx.strategies[seat] ?? DIFFICULTY_PRESETS.intermediate;
+          const tiles = chooseTilesForCharleston(strategy, state.hands[seat], state.wall, ctx.patterns);
+          const staged = { ...state.charleston.staged, [seat]: tiles.map(t => t.id) };
+          return maybeAdvanceCharleston({ ...state, charleston: { ...state.charleston, staged } }, ctx);
+        }
+        if (pa?.type === "human_charleston_stop" && pa.votes[seat] === undefined) {
+          const strategy = ctx.strategies[seat] ?? DIFFICULTY_PRESETS.intermediate;
+          const vote = shouldStopCharleston(strategy, state.hands[seat], state.wall, ctx.patterns);
+          const votes = { ...pa.votes, [seat]: vote };
+          return maybeResolveCharlestonVote({ ...state, pendingAction: { ...pa, votes } }, ctx);
+        }
+        return state; // nothing currently pending for this seat
+      }
+
+      if (state.phase === "playing") {
+        if (pa?.type === "human_discard" && state.currentSeat === seat) {
+          // Clearing pendingAction hands control to the normal ADVANCE_CPU path —
+          // GameRoom.drive() calls it next and currentSeat is no longer human.
+          return { ...state, pendingAction: null };
+        }
+        if (pa?.type === "claim_window" && pa.eligibleSeats[seat] !== undefined && pa.responses[seat] === undefined) {
+          const { [seat]: _dropped, ...eligibleSeats } = pa.eligibleSeats;
+          // No response needs synthesizing here: resolveClaimWindow computes a
+          // fresh CPU candidate for every seat outside ctx.humanSeats on its
+          // own, and `seat` no longer is one — it's picked up automatically.
+          return maybeResolveClaimWindow({ ...state, pendingAction: { ...pa, eligibleSeats } }, ctx);
+        }
+        return state;
+      }
+
+      return state;
     }
 
     // ── SET_STATE ─────────────────────────────────────────────────────────────
@@ -613,18 +628,96 @@ export function gameReducer(
 // Internal Charleston helpers
 // =============================================================================
 
-/** Have every CPU seat stage their 3 tiles for `step`. */
+/** Have every CPU seat stage their 3 tiles for `step`. Real human seats stage via HUMAN_STAGE_CHARLESTON. */
 function cpuStageCharleston(state: GameState, ctx: EngineContext, step: number): GameState {
   const staged = { ...(state.charleston?.staged ?? {}) };
 
   for (const seat of SEAT_ORDER) {
-    if (seat === ctx.humanSeat) continue;
+    if (ctx.humanSeats.has(seat)) continue;
     const strategy = ctx.strategies[seat] ?? DIFFICULTY_PRESETS.intermediate;
     const tiles = chooseTilesForCharleston(strategy, state.hands[seat], state.wall, ctx.patterns);
     staged[seat] = tiles.map(t => t.id);
   }
 
   return { ...state, charleston: { ...state.charleston!, staged } };
+}
+
+/**
+ * Staging barrier: if every human seat has staged for the current step,
+ * execute the exchange and advance (recursing into the next step, which may
+ * itself already be fully staged — e.g. an all-CPU room resolves the whole
+ * Charleston in one synchronous call). Otherwise returns state unchanged,
+ * genuinely waiting on the remaining human seat(s).
+ */
+function maybeAdvanceCharleston(state: GameState, ctx: EngineContext): GameState {
+  const pa = state.pendingAction;
+  if (pa?.type !== "human_charleston_pass" || !state.charleston) return state;
+  const step = state.charleston.step;
+  const allStaged = Array.from(ctx.humanSeats).every(s => state.charleston!.staged[s]);
+  if (!allStaged) return state;
+
+  let newState = executeCharleston(state, step);
+  const nextStep = step + 1;
+
+  // After First Charleston (steps 0–2): every seat votes on the Second.
+  if (nextStep === 3) {
+    const cpuSeats = SEAT_ORDER.filter(s => !ctx.humanSeats.has(s));
+    const votes: Partial<Record<PlayerId, boolean>> = {};
+    for (const seat of cpuSeats) {
+      const strategy = ctx.strategies[seat] ?? DIFFICULTY_PRESETS.intermediate;
+      votes[seat] = shouldStopCharleston(strategy, newState.hands[seat], newState.wall, ctx.patterns);
+    }
+    return maybeResolveCharlestonVote(
+      {
+        ...newState,
+        charleston: { ...newState.charleston!, step: nextStep, staged: {} },
+        pendingAction: { type: "human_charleston_stop", votes },
+      },
+      ctx,
+    );
+  }
+
+  // After all 6 steps — Second Charleston was played, so begin courtesy phase.
+  if (nextStep > 5) {
+    return startCourtesyOrFinish(addLog(newState.log, "Charleston complete."), newState, ctx, /* hadSecond */ true);
+  }
+
+  newState = { ...newState, charleston: { ...newState.charleston!, step: nextStep, staged: {} } };
+  newState = cpuStageCharleston(newState, ctx, nextStep);
+  newState = { ...newState, pendingAction: { type: "human_charleston_pass", step: nextStep } };
+  return maybeAdvanceCharleston(newState, ctx);
+}
+
+/**
+ * Resolve the Second-Charleston vote once possible: a stop vote (from anyone,
+ * human or CPU) is decisive immediately — no other vote can undo it. Otherwise
+ * waits until every human seat has voted; if nobody stopped it, begins step 3.
+ */
+function maybeResolveCharlestonVote(state: GameState, ctx: EngineContext): GameState {
+  const pa = state.pendingAction;
+  if (pa?.type !== "human_charleston_stop") return state;
+
+  const stopper = SEAT_ORDER.find(s => pa.votes[s] === true);
+  if (stopper) {
+    return startCourtesyOrFinish(
+      addLog(state.log, `${stopper} votes to skip — Second Charleston ends.`),
+      state,
+      ctx,
+      /* hadSecond */ false,
+    );
+  }
+
+  const stillWaiting = Array.from(ctx.humanSeats).some(s => pa.votes[s] === undefined);
+  if (stillWaiting) return state;
+
+  let newState: GameState = {
+    ...state,
+    charleston: { ...state.charleston!, step: 3, staged: {} },
+    log: addLog(state.log, "Second Charleston begins."),
+  };
+  newState = cpuStageCharleston(newState, ctx, 3);
+  newState = { ...newState, pendingAction: { type: "human_charleston_pass", step: 3 } };
+  return maybeAdvanceCharleston(newState, ctx);
 }
 
 /** Execute the tile exchange for `step`, using whatever is in `charleston.staged`. */
@@ -799,9 +892,9 @@ function processDiscard(
 }
 
 /**
- * Open a claim window. Returns a state with either:
- * - pendingAction: { type: 'claim_window' } if the human can claim
- * - or immediately resolves CPU claims and advances the turn
+ * Open a claim window. Every human seat (other than the discarder) eligible
+ * to claim something gets a pendingAction and must respond; if none is
+ * eligible, resolves immediately among CPU seats (no one to wait for).
  */
 function openClaimWindow(
   state: GameState,
@@ -809,76 +902,120 @@ function openClaimWindow(
   discard: Tile,
   discardedBy: PlayerId
 ): GameState {
-  const others = SEAT_ORDER.filter(s => s !== discardedBy);
-
-  // Human claim opportunity — check first (guard against invalid humanSeat in tests)
-  const humanHand = state.hands[ctx.humanSeat];
-  const humanEligible =
-    humanHand && ctx.humanSeat !== discardedBy
-      ? eligibleClaims(discard, humanHand, state.wall, ctx.patterns)
-      : [];
-
-  if (humanEligible.length > 0) {
-    return {
-      ...state,
-      pendingAction: {
-        type: "claim_window",
-        discard,
-        discardedBy,
-        eligibleTypes: humanEligible,
-      },
-    };
+  const eligibleSeats: Partial<Record<PlayerId, ClaimType[]>> = {};
+  for (const seat of Array.from(ctx.humanSeats)) {
+    if (seat === discardedBy) continue;
+    const hand = state.hands[seat];
+    if (!hand) continue; // guard against an invalid humanSeat in tests
+    const types = eligibleClaims(discard, hand, state.wall, ctx.patterns);
+    if (types.length > 0) eligibleSeats[seat] = types;
   }
 
-  // No human claim — resolve CPU claims immediately
-  return resolveCpuClaims(state, ctx, discard, discardedBy, null);
+  if (Object.keys(eligibleSeats).length === 0) {
+    return resolveClaimWindow(state, ctx, discard, discardedBy, {});
+  }
+
+  return {
+    ...state,
+    pendingAction: { type: "claim_window", discard, discardedBy, eligibleSeats, responses: {} },
+  };
+}
+
+/** If every eligible seat has responded, resolve the window; otherwise wait. */
+function maybeResolveClaimWindow(state: GameState, ctx: EngineContext): GameState {
+  const pa = state.pendingAction;
+  if (pa?.type !== "claim_window") return state;
+  const stillWaiting = Object.keys(pa.eligibleSeats).some(
+    s => pa.responses[s as PlayerId] === undefined
+  );
+  if (stillWaiting) return state;
+  return resolveClaimWindow(state, ctx, pa.discard, pa.discardedBy, pa.responses);
+}
+
+const CLAIM_RANK: Record<ClaimType, number> = { mahjong: 3, quint: 2, kong: 1, pung: 0 };
+
+/** How many turn-order hops from `discardedBy` to reach `seat` — used to break priority ties. */
+function turnOrderDistance(discardedBy: PlayerId, seat: PlayerId): number {
+  let d = 0;
+  let s = discardedBy;
+  while (s !== seat) {
+    s = nextSeat(s);
+    d++;
+  }
+  return d;
 }
 
 /**
- * Resolve CPU claim decisions. If any CPU claims, process it and return.
- * If no one claims, advance to next player's draw.
+ * Resolve a claim window: gather every human's claim (from `responses`,
+ * passes excluded) plus freshly-computed CPU decisions, then pick the
+ * highest-priority candidate (mahjong > quint > kong > pung; ties broken by
+ * nearest seat in turn order from the discarder). No candidates → play
+ * advances to the next seat's draw.
  */
-function resolveCpuClaims(
+function resolveClaimWindow(
   state: GameState,
   ctx: EngineContext,
   discard: Tile,
   discardedBy: PlayerId,
-  humanAlreadyPassed: PlayerId | null
+  humanResponses: Partial<Record<PlayerId, ClaimType | "pass">>,
 ): GameState {
-  const cpuSeats = SEAT_ORDER.filter(
-    s => s !== discardedBy && s !== humanAlreadyPassed && !ctx.humanSeats.has(s)
-  );
+  const candidates: Array<{ seat: PlayerId; claimType: ClaimType }> = [];
 
-  // Check mahjong claims first across all CPUs
+  for (const seat of SEAT_ORDER) {
+    const resp = humanResponses[seat];
+    if (resp && resp !== "pass") candidates.push({ seat, claimType: resp });
+  }
+
+  const cpuSeats = SEAT_ORDER.filter(s => s !== discardedBy && !ctx.humanSeats.has(s));
   for (const seat of cpuSeats) {
     const strategy = ctx.strategies[seat] ?? DIFFICULTY_PRESETS.intermediate;
     if (strategy.shouldClaim(discard, state.hands[seat], "mahjong", state.wall, ctx.patterns)) {
-      const hand = state.hands[seat];
-      return {
-        ...state,
-        winner: seat,
-        winningPattern:
-          evaluateHand([...hand, discard], state.wall, ctx.patterns).bestPatterns[0]?.pattern ?? null,
-        phase: "finished",
-        pendingAction: null,
-        log: addLog(state.log, `${seat} declares MAHJONG!`),
-      };
+      candidates.push({ seat, claimType: "mahjong" });
+      continue;
     }
-  }
-
-  // Shuffle eligible CPUs for random claim priority among non-mahjong
-  const shuffledCpus = [...cpuSeats].sort(() => Math.random() - 0.5);
-  for (const seat of shuffledCpus) {
-    const strategy = ctx.strategies[seat] ?? DIFFICULTY_PRESETS.intermediate;
-    for (const claimType of ["quint", "kong", "pung"] as ("pung" | "kong" | "quint")[]) {
+    for (const claimType of ["quint", "kong", "pung"] as const) {
       if (strategy.shouldClaim(discard, state.hands[seat], claimType, state.wall, ctx.patterns)) {
-        return processClaim(state, ctx, seat, discard, discardedBy, claimType);
+        candidates.push({ seat, claimType });
+        break;
       }
     }
   }
 
-  // No claims — advance to next player's draw turn
-  return advanceToNextDraw(state, ctx, nextSeat(discardedBy));
+  if (candidates.length === 0) {
+    return advanceToNextDraw(state, ctx, nextSeat(discardedBy));
+  }
+
+  candidates.sort((a, b) =>
+    CLAIM_RANK[b.claimType] - CLAIM_RANK[a.claimType] ||
+    turnOrderDistance(discardedBy, a.seat) - turnOrderDistance(discardedBy, b.seat)
+  );
+  const winner = candidates[0];
+
+  if (winner.claimType === "mahjong") {
+    return applyMahjongWin(state, ctx, winner.seat, [...state.hands[winner.seat], discard], "discard", discardedBy);
+  }
+  return processClaim(state, ctx, winner.seat, discard, discardedBy, winner.claimType);
+}
+
+/** Construct the finished-game state for a mahjong win, shared by every win site. */
+function applyMahjongWin(
+  state: GameState,
+  ctx: EngineContext,
+  seat: PlayerId,
+  handForEval: Tile[],
+  kind: "discard" | "self_draw",
+  discardedBy: PlayerId | null,
+): GameState {
+  return {
+    ...state,
+    winner: seat,
+    winningPattern: evaluateHand(handForEval, state.wall, ctx.patterns).bestPatterns[0]?.pattern ?? null,
+    winKind: kind,
+    winDiscardedBy: discardedBy,
+    phase: "finished",
+    pendingAction: null,
+    log: addLog(state.log, kind === "discard" ? `${seat} declares MAHJONG!` : `${seat} self-draws MAHJONG!`),
+  };
 }
 
 function processClaim(
@@ -1100,15 +1237,7 @@ function runCpuTurn(state: GameState, ctx: EngineContext, seat: PlayerId): GameS
 
   // Check for self-draw mahjong (14 tiles after draw in advanceToNextDraw)
   if (hand.length === 14 && isWinningHand(hand, stateAfterSwaps.wall, ctx.patterns)) {
-    return {
-      ...stateAfterSwaps,
-      winner: seat,
-      winningPattern:
-        evaluateHand(hand, stateAfterSwaps.wall, ctx.patterns).bestPatterns[0]?.pattern ?? null,
-      phase: "finished",
-      pendingAction: null,
-      log: addLog(stateAfterSwaps.log, `${seat} self-draws MAHJONG!`),
-    };
+    return applyMahjongWin(stateAfterSwaps, ctx, seat, hand, "self_draw", null);
   }
 
   const evalResult = evaluateHand(hand, stateAfterSwaps.wall, ctx.patterns);

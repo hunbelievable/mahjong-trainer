@@ -1,10 +1,9 @@
-import Link from "next/link";
-import { auth, signOut } from "@/auth";
+import { currentUser } from "@/lib/server/currentUser";
 import CreateRoomForm from "./CreateRoomForm";
 import JoinRoomForm from "./JoinRoomForm";
 
 export default async function MultiplayerPage() {
-  const session = await auth();
+  const user = await currentUser();
 
   return (
     <main className="min-h-screen bg-gray-50 flex flex-col items-center justify-center px-4">
@@ -16,32 +15,20 @@ export default async function MultiplayerPage() {
           </p>
         </div>
 
-        {!session?.user ? (
-          <div className="bg-white rounded-xl border border-gray-200 p-6 text-center space-y-3">
-            <p className="text-sm text-gray-600">Sign in to create or join a room.</p>
-            <Link
-              href="/api/auth/signin"
-              className="inline-block px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-lg transition-colors"
-            >
-              Sign in
-            </Link>
+        {!user ? (
+          <div className="bg-white rounded-xl border border-rose-200 p-6 text-center space-y-2">
+            <p className="text-sm text-rose-700 font-semibold">Couldn't verify your identity.</p>
+            <p className="text-xs text-gray-500">
+              This app expects to be reached through the Cloudflare Access gate. If you're seeing this, check the
+              CF_ACCESS_TEAM_DOMAIN / CF_ACCESS_AUD configuration.
+            </p>
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="flex items-center justify-between bg-white rounded-xl border border-gray-200 px-4 py-3">
+            <div className="bg-white rounded-xl border border-gray-200 px-4 py-3">
               <span className="text-sm text-gray-600">
-                Signed in as <span className="font-semibold text-gray-800">{session.user.email ?? session.user.name}</span>
+                Signed in as <span className="font-semibold text-gray-800">{user.email}</span>
               </span>
-              <form
-                action={async () => {
-                  "use server";
-                  await signOut({ redirectTo: "/multiplayer" });
-                }}
-              >
-                <button type="submit" className="text-xs text-gray-400 hover:text-gray-600 underline">
-                  Sign out
-                </button>
-              </form>
             </div>
 
             <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-3">

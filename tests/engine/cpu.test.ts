@@ -212,9 +212,9 @@ describe("gameEngine — full game simulation", () => {
         if (state.pendingAction?.type === "human_charleston_pass") {
           const hand = state.hands["E"];
           const tiles = chooseTilesForCharleston(DIFFICULTY_PRESETS.intermediate, hand, state.wall, PATTERNS);
-          state = gameReducer(state, { type: "HUMAN_STAGE_CHARLESTON", tileIds: tiles.map(t => t.id) }, ctx);
+          state = gameReducer(state, { type: "HUMAN_STAGE_CHARLESTON", tileIds: tiles.map(t => t.id), seat: "E" }, ctx);
         } else if (state.pendingAction?.type === "human_charleston_stop") {
-          state = gameReducer(state, { type: "BEGIN_SECOND_CHARLESTON" }, ctx);
+          state = gameReducer(state, { type: "BEGIN_SECOND_CHARLESTON", seat: "E" }, ctx);
         } else if (state.pendingAction?.type === "human_courtesy_propose") {
           // Decline courtesy in this integration test
           state = gameReducer(state, { type: "HUMAN_COURTESY_RESPOND", count: 0 }, ctx);
@@ -238,7 +238,7 @@ describe("gameEngine — full game simulation", () => {
           state = gameReducer(state, { type: "HUMAN_DISCARD", tileId: choice.id }, ctx);
         } else if (state.pendingAction.type === "claim_window") {
           // Human always passes in this integration test
-          state = gameReducer(state, { type: "HUMAN_PASS" }, ctx);
+          state = gameReducer(state, { type: "HUMAN_PASS", seat: "E" }, ctx);
         } else {
           break;
         }

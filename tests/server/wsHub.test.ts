@@ -15,7 +15,7 @@ describe("WsHub", () => {
   it("pushes a lobby view immediately on connect", () => {
     const manager = new RoomManager();
     const hub = new WsHub(manager);
-    const { id } = manager.createRoom();
+    const { id } = manager.createRoom("creator");
     manager.claimSeat(id, "E", "alice");
 
     const sock = fakeSocket();
@@ -28,7 +28,7 @@ describe("WsHub", () => {
   it("broadcasts an updated lobby view to all connections after a lobby mutation", () => {
     const manager = new RoomManager();
     const hub = new WsHub(manager);
-    const { id } = manager.createRoom();
+    const { id } = manager.createRoom("creator");
     manager.claimSeat(id, "E", "alice");
 
     const aliceSock = fakeSocket();
@@ -50,7 +50,7 @@ describe("WsHub", () => {
   it("switches a seated connection from lobby to game view once the game starts", () => {
     const manager = new RoomManager();
     const hub = new WsHub(manager);
-    const { id } = manager.createRoom();
+    const { id } = manager.createRoom("creator");
     manager.claimSeat(id, "E", "alice"); // East acts first
 
     const sock = fakeSocket();
@@ -74,7 +74,7 @@ describe("WsHub", () => {
   it("never leaks another seat's concealed tiles to a connection's pushed view", () => {
     const manager = new RoomManager();
     const hub = new WsHub(manager);
-    const { id } = manager.createRoom();
+    const { id } = manager.createRoom("creator");
     manager.claimSeat(id, "E", "alice");
     manager.claimSeat(id, "S", "bob");
     manager.start(id);
@@ -94,7 +94,7 @@ describe("WsHub", () => {
   it("errors and closes a connection that has no seat once the game has started", () => {
     const manager = new RoomManager();
     const hub = new WsHub(manager);
-    const { id } = manager.createRoom();
+    const { id } = manager.createRoom("creator");
     manager.claimSeat(id, "E", "alice");
 
     const spectatorSock = fakeSocket();
@@ -110,7 +110,7 @@ describe("WsHub", () => {
   it("stops pushing to a connection after it unregisters", () => {
     const manager = new RoomManager();
     const hub = new WsHub(manager);
-    const { id } = manager.createRoom();
+    const { id } = manager.createRoom("creator");
     manager.claimSeat(id, "E", "alice");
 
     const sock = fakeSocket();
@@ -131,5 +131,55 @@ describe("WsHub", () => {
     const sock = fakeSocket();
     hub.connect("NOSUCH", "alice", sock);
     expect(sock.messages[0]).toMatchObject({ type: "error", message: "room not found" });
+  });
+
+  it("broadcastChat sends the same message to every connection uniformly, with no redaction", () => {
+    const manager = new RoomManager();
+    const hub = new WsHub(manager);
+    const { id } = manager.createRoom("creator");
+    manager.claimSeat(id, "E", "alice");
+    manager.claimSeat(id, "S", "bob");
+
+    const aliceSock = fakeSocket();
+    const bobSock = fakeSocket();
+    hub.connect(id, "alice", aliceSock);
+    hub.connect(id, "bob", bobSock);
+
+    const message = manager.sendChatMessage(id, "alice", "hello table")!;
+    hub.broadcastChat(id, message);
+
+    // each got their initial lobby push + the chat broadcast
+    expect(aliceSock.messages).toHaveLength(2);
+    expect(bobSock.messages).toHaveLength(2);
+    expect(aliceSock.messages[1]).toEqual({ type: "chatMessage", message });
+    expect(bobSock.messages[1]).toEqual({ type: "chatMessage", message }); // identical — no per-seat redaction
+  });
+
+  it("pushes recent chat history once on connect, after the lobby/game view", () => {
+    const manager = new RoomManager();
+    const hub = new WsHub(manager);
+    const { id } = manager.createRoom("creator");
+    manager.claimSeat(id, "E", "alice");
+    manager.sendChatMessage(id, "alice", "already said this before bob joins");
+
+    const bobSock = fakeSocket();
+    hub.connect(id, "bob", bobSock);
+
+    expect(bobSock.messages[0]).toMatchObject({ type: "lobby" });
+    expect(bobSock.messages[1]).toMatchObject({
+      type: "chatHistory",
+      messages: [{ seat: "E", text: "already said this before bob joins" }],
+    });
+  });
+
+  it("doesn't push a chatHistory message at all when there's no history yet", () => {
+    const manager = new RoomManager();
+    const hub = new WsHub(manager);
+    const { id } = manager.createRoom("creator");
+
+    const sock = fakeSocket();
+    hub.connect(id, "alice", sock);
+
+    expect(sock.messages).toHaveLength(1); // just the lobby push, no empty chatHistory frame
   });
 });

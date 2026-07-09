@@ -37,7 +37,6 @@ COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 COPY --from=builder /app/next.config.js ./next.config.js
 COPY --from=builder /app/tsconfig.json ./tsconfig.json
 COPY --from=builder /app/server.ts ./server.ts
-COPY --from=builder /app/auth.ts ./auth.ts
 COPY --from=builder /app/lib ./lib
 COPY --from=builder /app/engine ./engine
 COPY --from=builder /app/types ./types
