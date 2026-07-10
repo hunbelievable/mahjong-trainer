@@ -66,13 +66,17 @@ model HandPattern {
 // =============================================================================
 
 model User {
-  id           String        @id @default(cuid())
-  email        String        @unique
+  id                    String         @id @default(cuid())
+  email                 String         @unique
   /// Multiplayer display handle, shown as "Seat (handle)" — null until the user sets one.
-  handle       String?
-  createdAt    DateTime      @default(now())
-  matchPlayers MatchPlayer[]
-  createdRooms Room[]
+  handle                String?
+  createdAt             DateTime       @default(now())
+  matchPlayers          MatchPlayer[]
+  createdRooms          Room[]
+  commissionedLeagues   League[]       @relation("LeagueCommissioner")
+  leagueMemberships     LeagueMember[]
+  scoreRecords          ScoreRecord[]  @relation("ScoreRecordSubject")
+  enteredScoreRecords   ScoreRecord[]  @relation("ScoreRecordEnteredBy")
 }
 
 // ── Domain projections ───────────────────────────────────────────────────────
@@ -134,4 +138,78 @@ model MatchGame {
 
   @@unique([matchId, gameNumber])
   @@index([matchId])
+}
+
+// =============================================================================
+// League — a separate PRODUCT (standalone value for a club that plays 100%
+// physically and never opens the online game), kept in this codebase as a
+// cleanly bounded module until a second customer ever exists. Hard boundary:
+// league code references User and score records only — never GameRoom, never
+// the engine. Postgres is directly authoritative here (unlike Room/Match,
+// there's no in-memory runtime this mirrors — manual score entry is
+// first-class, not a fallback). See docs/league-handoff.md.
+// =============================================================================
+
+model League {
+  id                 String         @id @default(cuid())
+  name               String
+  commissionerUserId String
+  commissioner       User           @relation("LeagueCommissioner", fields: [commissionerUserId], references: [id])
+  createdAt          DateTime       @default(now())
+  members            LeagueMember[]
+  seasons            Season[]
+}
+
+/// leagueId+userId membership; the commissioner also gets a row here (role="commissioner") so they appear in member listings without special-casing.
+model LeagueMember {
+  id       String   @id @default(cuid())
+  leagueId String
+  league   League   @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  userId   String
+  user     User     @relation(fields: [userId], references: [id])
+  role     String // commissioner | member
+  joinedAt DateTime @default(now())
+
+  @@unique([leagueId, userId])
+}
+
+/// Open-ended by default (endsAt nullable), matching how a Match's standings already work.
+model Season {
+  id       String          @id @default(cuid())
+  leagueId String
+  league   League          @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  name     String
+  startsAt DateTime        @default(now())
+  endsAt   DateTime?
+  sessions LeagueSession[]
+}
+
+/// One "league night" — deliberately minimal (no RSVP/calendar): the commissioner starts one when everyone's there.
+model LeagueSession {
+  id          String        @id @default(cuid())
+  seasonId    String
+  season      Season        @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  scheduledAt DateTime      @default(now())
+  label       String?
+  scores      ScoreRecord[]
+}
+
+/// The standings aggregation atom. `source` distinguishes manual entry (Phase 1) from a future online
+/// auto-feed (Phase 2, source="online", matchGameId set) — same shape either way. One row per
+/// (sessionId, userId): re-entering a session's scores updates in place rather than duplicating.
+model ScoreRecord {
+  id              String        @id @default(cuid())
+  sessionId       String
+  session         LeagueSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User          @relation("ScoreRecordSubject", fields: [userId], references: [id])
+  points          Int
+  source          String // manual | online
+  /// Null for manual entries — set once Phase 2 auto-feeds from a MatchGame.
+  matchGameId     String?
+  enteredByUserId String
+  enteredBy       User          @relation("ScoreRecordEnteredBy", fields: [enteredByUserId], references: [id])
+  createdAt       DateTime      @default(now())
+
+  @@unique([sessionId, userId])
 }

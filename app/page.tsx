@@ -43,6 +43,13 @@ const MODES = [
     badge: "bg-indigo-100 text-indigo-700",
     description: "Play a real game with friends, each on their own browser — open seats fill with CPUs.",
   },
+  {
+    href: "/league",
+    label: "League",
+    color: "bg-emerald-600 hover:bg-emerald-700",
+    badge: "bg-emerald-100 text-emerald-700",
+    description: "Run a mahjong league with your circle — manual scoring, standings, season history.",
+  },
 ];
 
 export default function Home() {

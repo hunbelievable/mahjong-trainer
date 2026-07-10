@@ -13,6 +13,7 @@ const NAV_LINKS = [
   { href: "/stats",       label: "Stats"       },
   { href: "/patterns",    label: "Patterns"    },
   { href: "/multiplayer", label: "Multiplayer" },
+  { href: "/league",      label: "League"      },
 ];
 
 export default function Nav() {
