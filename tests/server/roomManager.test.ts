@@ -1,8 +1,21 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// RoomManager's durable writes are fire-and-forget side effects; mock the whole
+// store so these tests stay database-free AND can assert the wiring itself
+// (see "durable persistence" describe below).
+vi.mock("@/lib/server/matchStore", () => ({
+  persistMatchCreate: vi.fn(),
+  persistMatchGame: vi.fn(),
+  persistMatchPlayerScores: vi.fn(),
+  persistSeatVacated: vi.fn(),
+  reconcileMatch: vi.fn(),
+}));
+
+import { persistSeatVacated, reconcileMatch, type MatchSnapshot } from "@/lib/server/matchStore";
 import { RoomManager } from "@/lib/server/roomManager";
 import type { EventLog } from "@/lib/server/eventLog";
 import type { RoomEvent } from "@/lib/server/gameRoom";
-import { nextDealer } from "@/lib/server/match";
+import { nextDealer, computeWindAssignment } from "@/lib/server/match";
 
 /**
  * Drive a just-started room through its Charleston (3 arbitrary non-joker
@@ -326,6 +339,40 @@ describe("RoomManager — match & rotation", () => {
     expect(nextView.match!.canStartNextGame).toBe(false);
   });
 
+  it("yourPhysicalSeat stays fixed across a dealer rotation even though the wind label (`you`) changes", () => {
+    // Game 1's dealer is always physical E (see start()), so computeWindAssignment("E")
+    // is the identity map — physical and wind labels coincide for every seat in game 1
+    // specifically, which is why this class of bug (comparing `you` against
+    // physical-keyed data like MatchView.players/ChatMessage) never showed up
+    // until a later game rotated the deal to a different physical seat.
+    const mgr = new RoomManager();
+    const { id } = mgr.createRoom("creator");
+    mgr.claimSeat(id, "S", "alice"); // deliberately not the initial dealer seat
+    mgr.start(id, "creator");
+    driveCharlestonToPlay(mgr, id, "alice");
+
+    const game1View = mgr.viewFor(id, "alice")!;
+    expect(game1View.yourPhysicalSeat).toBe("S");
+    expect(game1View.you).toBe("S"); // coincides in game 1 — the trap
+
+    // Simulate the dealer having rotated to physical N (as nextDealer() would
+    // after a non-dealer win) without needing to actually play a full hand to
+    // a specific winner — the projection logic being tested here doesn't care
+    // how the rotation happened, only that it did.
+    const room = mgr.getRoom(id)!;
+    room.match!.dealerSeat = "N";
+    room.match!.windAssignment = computeWindAssignment("N");
+
+    const rotatedView = mgr.viewFor(id, "alice")!;
+    expect(rotatedView.yourPhysicalSeat).toBe("S"); // physical seat never moves
+    expect(rotatedView.you).toBe("W"); // wind label now differs from the physical seat
+
+    const aliceRow = rotatedView.match!.players.find((p) => p.isYou)!;
+    expect(aliceRow.seat).toBe("S"); // MatchView.players is physical-keyed
+    expect(aliceRow.seat).toBe(rotatedView.yourPhysicalSeat); // → compare against this
+    expect(aliceRow.seat).not.toBe(rotatedView.you); // → NOT this, or the highlight picks the wrong row
+  });
+
   it("startNextGame is rejected until the current game is finished, and requires a seated user", () => {
     const mgr = new RoomManager();
     const { id } = mgr.createRoom("creator");
@@ -500,6 +547,69 @@ describe("RoomManager — closeRoom", () => {
     expect(mgr.forfeitSeat(id, "alice")).toBe(false);
     expect(mgr.kickSeat(id, "creator", "E")).toBe(false);
     expect(mgr.submit(id, "alice", { type: "HUMAN_PASS" })).toBe(false);
+  });
+});
+
+describe("RoomManager — durable persistence of kicks & close", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("kickSeat records the vacated seat durably, with the game number it happened in", () => {
+    const mgr = new RoomManager();
+    const { id } = mgr.createRoom("creator");
+    mgr.claimSeat(id, "E", "alice");
+    mgr.start(id, "creator");
+    driveCharlestonToPlay(mgr, id, "alice");
+
+    mgr.kickSeat(id, "creator", "E");
+
+    const match = mgr.getRoom(id)!.match!;
+    expect(match.players.E.vacatedAtGame).toBe(1);
+    expect(persistSeatVacated).toHaveBeenCalledWith(match.id, "E", "beginner", 1);
+  });
+
+  it("forfeitSeat records the vacated seat the same way", () => {
+    const mgr = new RoomManager();
+    const { id } = mgr.createRoom("creator");
+    mgr.claimSeat(id, "S", "alice");
+    mgr.start(id, "creator");
+    driveCharlestonToPlay(mgr, id, "alice");
+
+    mgr.forfeitSeat(id, "alice");
+
+    expect(persistSeatVacated).toHaveBeenCalledWith(mgr.getRoom(id)!.match!.id, "S", "beginner", 1);
+  });
+
+  it("closeRoom mid-game reconciles the full in-memory match against the store", () => {
+    const mgr = new RoomManager();
+    const { id } = mgr.createRoom("creator");
+    mgr.claimSeat(id, "E", "alice");
+    mgr.start(id, "creator");
+    driveCharlestonToPlay(mgr, id, "alice");
+    mgr.forfeitSeat(id, "alice"); // all-CPU now — game runs to completion, giving history a real entry
+    const match = mgr.getRoom(id)!.match!;
+
+    mgr.closeRoom(id, "creator");
+
+    expect(reconcileMatch).toHaveBeenCalledTimes(1);
+    const snapshot = vi.mocked(reconcileMatch).mock.calls[0][0] as MatchSnapshot;
+    expect(snapshot.matchId).toBe(match.id);
+    expect(snapshot.roomId).toBe(id);
+    expect(snapshot.endedAt).toBeInstanceOf(Date);
+    expect(snapshot.history).toEqual(match.history);
+    expect(snapshot.players).toHaveLength(4);
+    // The forfeited seat: still attributed to alice, CPU-held from game 1, final score included.
+    const e = snapshot.players.find((p) => p.seat === "E")!;
+    expect(e).toMatchObject({ userId: "alice", isCpu: true, cpuDifficulty: "beginner", vacatedAtGame: 1 });
+    expect(e.score).toBe(match.players.E.score);
+  });
+
+  it("closeRoom from the lobby (no match yet) has nothing to reconcile", () => {
+    const mgr = new RoomManager();
+    const { id } = mgr.createRoom("creator");
+    mgr.closeRoom(id, "creator");
+    expect(reconcileMatch).not.toHaveBeenCalled();
   });
 });
 

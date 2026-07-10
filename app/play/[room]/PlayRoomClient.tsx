@@ -258,7 +258,7 @@ export default function PlayRoomClient({ roomId }: { roomId: string }) {
         {(state.kind === "lobby" || state.kind === "game") && (
           <ChatPanel
             messages={chatMessages}
-            yourSeat={state.kind === "lobby" ? state.view.yourSeat : state.view.you}
+            yourSeat={state.kind === "lobby" ? state.view.yourSeat : state.view.yourPhysicalSeat}
             handles={chatHandles}
             onSend={sendChat}
           />
@@ -897,7 +897,7 @@ function GamePanel({
         {view.match && (
           <StandingsPanel
             match={view.match}
-            you={view.you}
+            you={view.yourPhysicalSeat}
             onNextGame={onNextGame}
             onKick={onKick}
             onForfeit={onForfeit}
@@ -925,6 +925,7 @@ function StandingsPanel({
   onCloseRoom,
 }: {
   match: MatchView;
+  /** The viewer's PHYSICAL seat (view.yourPhysicalSeat) — match.players[].seat is physical too, unlike view.you which is this game's wind label. */
   you: PlayerId;
   onNextGame: () => void;
   onKick: (seat: PlayerId) => void;
@@ -1033,6 +1034,7 @@ function ChatPanel({
   onSend,
 }: {
   messages: ChatMessage[];
+  /** PHYSICAL seat, matching ChatMessage.seat — pass LobbyView.yourSeat or PlayerView.yourPhysicalSeat, never PlayerView.you (a wind label). */
   yourSeat: PlayerId | null;
   handles: Partial<Record<PlayerId, string>>;
   onSend: (text: string) => void;

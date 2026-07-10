@@ -109,6 +109,9 @@ model MatchPlayer {
   user          User?   @relation(fields: [userId], references: [id])
   isCpu         Boolean @default(false)
   cpuDifficulty String? // beginner | intermediate | advanced (when isCpu)
+  /// Game number during which the seat was converted to CPU (kick/forfeit). userId stays set so
+  /// hands played BEFORE this game remain attributable; hands from this game on were CPU-played.
+  vacatedAtGame Int?
   score         Int     @default(0) // running zero-sum standings total
 
   @@unique([matchId, seat])

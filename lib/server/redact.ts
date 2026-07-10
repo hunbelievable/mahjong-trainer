@@ -28,6 +28,17 @@ export interface OpponentView {
 /** Everything a single seat may see. Safe to serialize and send to that client. */
 export interface PlayerView {
   you: PlayerId;
+  /**
+   * The viewer's FIXED PHYSICAL seat for the whole match — distinct from
+   * `you`, which is this game's WIND label and can change across dealer
+   * rotations (see lib/server/match.ts). Match standings (`MatchView.players`)
+   * and chat (`ChatMessage`) are physical-seat-keyed, so a client must compare
+   * against this field, not `you`, when deciding "is this row/message mine."
+   * Populated by RoomManager.viewFor (needs the physical↔wind bridge this pure
+   * function doesn't have); defaults to `you` itself outside a Match, where
+   * there is no physical/wind split at all (single-player/simulation/observe).
+   */
+  yourPhysicalSeat: PlayerId;
   phase: GamePhase;
   currentSeat: PlayerId;
 
@@ -147,6 +158,7 @@ export function redactStateForSeat(state: GameState, you: PlayerId): PlayerView 
 
   return {
     you,
+    yourPhysicalSeat: you,
     phase: state.phase,
     currentSeat: state.currentSeat,
     yourHand: state.hands[you] ?? [],

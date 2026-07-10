@@ -12,6 +12,7 @@ function mk(suit: Suit, val: TileVal, copy = 1): Tile {
 function baseView(overrides: Partial<PlayerView> = {}): PlayerView {
   return {
     you: "E",
+    yourPhysicalSeat: "E",
     phase: "playing",
     currentSeat: "E",
     yourHand: [],

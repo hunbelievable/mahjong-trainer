@@ -38,7 +38,13 @@ import {
   type MatchGameSummary,
   type MatchView,
 } from "./match";
-import { persistMatchCreate, persistMatchGame, persistMatchPlayerScores, persistMatchEnd } from "./matchStore";
+import {
+  persistMatchCreate,
+  persistMatchGame,
+  persistMatchPlayerScores,
+  persistSeatVacated,
+  reconcileMatch,
+} from "./matchStore";
 
 export type SeatState =
   | { kind: "open" }
@@ -54,6 +60,8 @@ interface MatchPlayer {
   cpuDifficulty: DifficultyLevel | null;
   handle: string | null;
   score: number;
+  /** Game number during which the seat was kicked/forfeited to CPU; null if never vacated. */
+  vacatedAtGame: number | null;
 }
 
 interface MatchState {
@@ -203,8 +211,29 @@ export class RoomManager {
     if (!room || room.closedAt !== null) return false;
     if (room.createdByUserId !== userId) return false;
     room.closedAt = Date.now();
-    if (room.match) void persistMatchEnd(room.match.id);
+    if (room.match) void reconcileMatch(this.matchSnapshot(room.id, room.match, room.closedAt));
     return true;
+  }
+
+  /** The full in-memory match truth, shaped for matchStore.reconcileMatch. */
+  private matchSnapshot(roomId: string, match: MatchState, closedAt: number) {
+    return {
+      matchId: match.id,
+      roomId,
+      players: SEAT_ORDER.map((s) => {
+        const p = match.players[s];
+        return {
+          seat: s,
+          userId: p.userId,
+          isCpu: p.isCpu,
+          cpuDifficulty: p.cpuDifficulty,
+          score: p.score,
+          vacatedAtGame: p.vacatedAtGame,
+        };
+      }),
+      history: match.history,
+      endedAt: new Date(closedAt),
+    };
   }
 
   /** The seat a user holds in a room, or null. */
@@ -264,9 +293,9 @@ export class RoomManager {
     const players = {} as Record<PlayerId, MatchPlayer>;
     for (const s of SEAT_ORDER) {
       const st = room.seats[s];
-      if (st.kind === "human") players[s] = { userId: st.userId, isCpu: false, cpuDifficulty: null, handle: st.handle, score: 0 };
-      else if (st.kind === "cpu") players[s] = { userId: null, isCpu: true, cpuDifficulty: st.difficulty, handle: null, score: 0 };
-      else players[s] = { userId: null, isCpu: true, cpuDifficulty: DEFAULT_CPU_DIFFICULTY, handle: null, score: 0 }; // open → CPU
+      if (st.kind === "human") players[s] = { userId: st.userId, isCpu: false, cpuDifficulty: null, handle: st.handle, score: 0, vacatedAtGame: null };
+      else if (st.kind === "cpu") players[s] = { userId: null, isCpu: true, cpuDifficulty: st.difficulty, handle: null, score: 0, vacatedAtGame: null };
+      else players[s] = { userId: null, isCpu: true, cpuDifficulty: DEFAULT_CPU_DIFFICULTY, handle: null, score: 0, vacatedAtGame: null }; // open → CPU
     }
 
     const matchId = crypto.randomUUID();
@@ -422,8 +451,10 @@ export class RoomManager {
       isCpu: true,
       cpuDifficulty: VACATED_SEAT_CPU_DIFFICULTY,
       handle: null,
+      vacatedAtGame: room.match.gameNumber,
     };
     room.seats[targetSeat] = { kind: "cpu", difficulty: VACATED_SEAT_CPU_DIFFICULTY };
+    void persistSeatVacated(room.match.id, targetSeat, VACATED_SEAT_CPU_DIFFICULTY, room.match.gameNumber);
 
     this.persistNewEvents(room.id, room.game);
     this.maybeRecordGameResult(room);
@@ -455,7 +486,12 @@ export class RoomManager {
     if (!seat) return null;
     const wind = room.match.windAssignment[seat];
     const view = room.game.viewFor(wind);
-    return { ...view, match: this.matchView(room, userId), handles: this.windKeyedHandles(room.match) };
+    return {
+      ...view,
+      yourPhysicalSeat: seat,
+      match: this.matchView(room, userId),
+      handles: this.windKeyedHandles(room.match),
+    };
   }
 
   /** Project each physical seat's handle onto its wind label for the current game — see the header comment. */
