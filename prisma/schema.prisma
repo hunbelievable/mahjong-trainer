@@ -88,6 +88,11 @@ model Room {
   createdById String?
   createdBy   User?    @relation(fields: [createdById], references: [id])
   matches     Match[]
+  /// Set when a room is one of a league night's pre-seated tables (Phase 2 auto-feed). Null for an
+  /// ordinary multiplayer room. This row may not exist yet at link time (a room's Postgres row is
+  /// only created via connectOrCreate when its first Match starts) — linking upserts it.
+  leagueSessionId String?
+  leagueSession   LeagueSession? @relation(fields: [leagueSessionId], references: [id])
 
   @@index([status])
 }
@@ -192,11 +197,15 @@ model LeagueSession {
   scheduledAt DateTime      @default(now())
   label       String?
   scores      ScoreRecord[]
+  /// Pre-seated multiplayer rooms for this league night (Phase 2). A league night's ScoreRecords are
+  /// synced from these rooms' finished Matches, one row per human player per room (summed across the
+  /// room's whole Match — the standings grain is "points for the night," not "points for one hand").
+  rooms       Room[]
 }
 
-/// The standings aggregation atom. `source` distinguishes manual entry (Phase 1) from a future online
-/// auto-feed (Phase 2, source="online", matchGameId set) — same shape either way. One row per
-/// (sessionId, userId): re-entering a session's scores updates in place rather than duplicating.
+/// The standings aggregation atom. `source` distinguishes manual entry (Phase 1) from the online
+/// auto-feed (Phase 2, source="online", matchId set). One row per (sessionId, userId): re-entering
+/// (whether by hand or by re-syncing) updates in place rather than duplicating.
 model ScoreRecord {
   id              String        @id @default(cuid())
   sessionId       String
@@ -205,8 +214,9 @@ model ScoreRecord {
   user            User          @relation("ScoreRecordSubject", fields: [userId], references: [id])
   points          Int
   source          String // manual | online
-  /// Null for manual entries — set once Phase 2 auto-feeds from a MatchGame.
-  matchGameId     String?
+  /// Null for manual entries. Set to the multiplayer Match.id once Phase 2 auto-feeds this row — a
+  /// whole Match's summed result (see the Room.leagueSessionId comment), not one individual MatchGame.
+  matchId         String?
   enteredByUserId String
   enteredBy       User          @relation("ScoreRecordEnteredBy", fields: [enteredByUserId], references: [id])
   createdAt       DateTime      @default(now())

@@ -6,10 +6,12 @@ import {
   getLeagueDetail,
   getSeasonStandings,
   getSessionScores,
+  getLinkedRooms,
   isLeagueMember,
 } from "@/lib/server/league";
 import StartSessionButton from "./StartSessionButton";
 import ScoreEntryPanel from "./ScoreEntryPanel";
+import LinkedRoomsPanel from "./LinkedRoomsPanel";
 
 export default async function SeasonDetailPage({ params }: { params: { id: string; seasonId: string } }) {
   const user = await currentUser();
@@ -26,7 +28,11 @@ export default async function SeasonDetailPage({ params }: { params: { id: strin
 
   const isCommissioner = league.commissionerUserId === user.id;
   const sessionsWithScores = await Promise.all(
-    season.sessions.map(async (s) => ({ ...s, scores: await getSessionScores(s.id) })),
+    season.sessions.map(async (s) => ({
+      ...s,
+      scores: await getSessionScores(s.id),
+      rooms: await getLinkedRooms(s.id),
+    })),
   );
 
   return (
@@ -49,7 +55,12 @@ export default async function SeasonDetailPage({ params }: { params: { id: strin
                 <li key={row.userId} className="flex items-center justify-between text-sm">
                   <span className="flex items-center gap-2">
                     <span className="text-xs text-gray-400 w-4">{i + 1}</span>
-                    <span className="font-medium text-gray-800">{row.handle ?? row.email}</span>
+                    <Link
+                      href={`/league/${league.id}/players/${row.userId}`}
+                      className="font-medium text-gray-800 hover:text-indigo-600"
+                    >
+                      {row.handle ?? row.email}
+                    </Link>
                   </span>
                   <span className="flex items-center gap-2">
                     <span className="text-xs text-gray-400">{row.sessionsPlayed} played</span>
@@ -78,14 +89,16 @@ export default async function SeasonDetailPage({ params }: { params: { id: strin
           ) : (
             <div className="space-y-4">
               {sessionsWithScores.map((s) => (
-                <ScoreEntryPanel
-                  key={s.id}
-                  sessionId={s.id}
-                  label={s.label ?? new Date(s.scheduledAt).toLocaleDateString()}
-                  members={league.members}
-                  existingScores={s.scores}
-                  isCommissioner={isCommissioner}
-                />
+                <div key={s.id} className="border border-gray-200 rounded-lg p-3">
+                  <ScoreEntryPanel
+                    sessionId={s.id}
+                    label={s.label ?? new Date(s.scheduledAt).toLocaleDateString()}
+                    members={league.members}
+                    existingScores={s.scores}
+                    isCommissioner={isCommissioner}
+                  />
+                  <LinkedRoomsPanel sessionId={s.id} rooms={s.rooms} isCommissioner={isCommissioner} />
+                </div>
               ))}
             </div>
           )}

@@ -4,10 +4,11 @@ vi.mock("@/lib/prisma", () => ({
   prisma: {
     league: { create: vi.fn(), findUnique: vi.fn() },
     leagueMember: { findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn() },
-    season: { create: vi.fn(), findUnique: vi.fn() },
+    season: { create: vi.fn(), findUnique: vi.fn(), findMany: vi.fn() },
     leagueSession: { create: vi.fn(), findUnique: vi.fn() },
     scoreRecord: { findMany: vi.fn(), upsert: vi.fn() },
-    user: { upsert: vi.fn() },
+    user: { upsert: vi.fn(), findUnique: vi.fn() },
+    room: { upsert: vi.fn(), findMany: vi.fn() },
   },
 }));
 
@@ -26,6 +27,10 @@ import {
   getSessionScores,
   getSeasonStandings,
   getSeasonDetail,
+  linkRoomToSession,
+  getLinkedRooms,
+  syncSessionScoresFromRooms,
+  getPlayerHistory,
 } from "@/lib/server/league";
 
 const db = vi.mocked(prisma, true);
@@ -269,6 +274,141 @@ describe("league — getSeasonStandings", () => {
   it("returns an empty list when no scores have been entered", async () => {
     db.scoreRecord.findMany.mockResolvedValue([]);
     expect(await getSeasonStandings("season1")).toEqual([]);
+  });
+});
+
+describe("league — linkRoomToSession", () => {
+  it("rejects a non-commissioner", async () => {
+    db.leagueSession.findUnique.mockResolvedValue({ season: { leagueId: "league1" } } as never);
+    db.league.findUnique.mockResolvedValue({ commissionerUserId: "user1" } as never);
+    expect(await linkRoomToSession("session1", "someone-else", "ROOM01")).toBe(false);
+    expect(db.room.upsert).not.toHaveBeenCalled();
+  });
+
+  it("upserts the Room row with leagueSessionId set — even if the room's Postgres row doesn't exist yet", async () => {
+    db.leagueSession.findUnique.mockResolvedValue({ season: { leagueId: "league1" } } as never);
+    db.league.findUnique.mockResolvedValue({ commissionerUserId: "user1" } as never);
+    db.room.upsert.mockResolvedValue({} as never);
+
+    expect(await linkRoomToSession("session1", "user1", "ROOM01")).toBe(true);
+    expect(db.room.upsert).toHaveBeenCalledWith({
+      where: { id: "ROOM01" },
+      create: { id: "ROOM01", leagueSessionId: "session1", createdById: "user1" },
+      update: { leagueSessionId: "session1" },
+    });
+  });
+});
+
+describe("league — getLinkedRooms", () => {
+  it("maps rooms to whether their latest match has finished", async () => {
+    db.room.findMany.mockResolvedValue([
+      { id: "ROOM01", matches: [{ endedAt: new Date(1) }] },
+      { id: "ROOM02", matches: [{ endedAt: null }] },
+      { id: "ROOM03", matches: [] }, // linked but never even started a match
+    ] as never);
+
+    expect(await getLinkedRooms("session1")).toEqual([
+      { roomId: "ROOM01", matchFinished: true },
+      { roomId: "ROOM02", matchFinished: false },
+      { roomId: "ROOM03", matchFinished: false },
+    ]);
+  });
+});
+
+describe("league — syncSessionScoresFromRooms", () => {
+  it("rejects a non-commissioner", async () => {
+    db.leagueSession.findUnique.mockResolvedValue({ season: { leagueId: "league1" } } as never);
+    db.league.findUnique.mockResolvedValue({ commissionerUserId: "user1" } as never);
+    expect(await syncSessionScoresFromRooms("session1", "someone-else")).toBeNull();
+    expect(db.room.findMany).not.toHaveBeenCalled();
+  });
+
+  it("sums payouts per player across a room's whole match (excluding games at/after vacatedAtGame) and skips unfinished rooms", async () => {
+    db.leagueSession.findUnique.mockResolvedValue({ season: { leagueId: "league1" } } as never);
+    db.league.findUnique.mockResolvedValue({ commissionerUserId: "user1" } as never);
+    db.room.findMany.mockResolvedValue([
+      {
+        id: "ROOM01",
+        matches: [
+          {
+            id: "match1",
+            endedAt: new Date(1),
+            players: [
+              { seat: "E", userId: "alice", vacatedAtGame: null },
+              { seat: "S", userId: "bob", vacatedAtGame: 2 }, // kicked before game 2
+              { seat: "W", userId: null, vacatedAtGame: null }, // CPU seat — never a human
+            ],
+            games: [
+              { gameNumber: 1, payouts: { E: 50, S: -25, W: -25, N: 0 } },
+              { gameNumber: 2, payouts: { E: -10, S: 30, W: -10, N: -10 } }, // excluded for bob
+            ],
+          },
+        ],
+      },
+      { id: "ROOM02", matches: [{ id: "match2", endedAt: null, players: [], games: [] }] }, // still in progress
+    ] as never);
+    db.scoreRecord.upsert.mockResolvedValue({} as never);
+
+    const result = await syncSessionScoresFromRooms("session1", "user1");
+
+    expect(result).toEqual({ syncedPlayers: 2, roomsSynced: 1, roomsSkipped: 1 });
+    expect(db.scoreRecord.upsert).toHaveBeenCalledWith({
+      where: { sessionId_userId: { sessionId: "session1", userId: "alice" } },
+      create: {
+        sessionId: "session1",
+        userId: "alice",
+        points: 40, // 50 + -10, not vacated
+        source: "online",
+        matchId: "match1",
+        enteredByUserId: "user1",
+      },
+      update: { points: 40, source: "online", matchId: "match1", enteredByUserId: "user1" },
+    });
+    expect(db.scoreRecord.upsert).toHaveBeenCalledWith({
+      where: { sessionId_userId: { sessionId: "session1", userId: "bob" } },
+      create: {
+        sessionId: "session1",
+        userId: "bob",
+        points: -25, // only game 1 — vacated before game 2
+        source: "online",
+        matchId: "match1",
+        enteredByUserId: "user1",
+      },
+      update: { points: -25, source: "online", matchId: "match1", enteredByUserId: "user1" },
+    });
+  });
+});
+
+describe("league — getPlayerHistory", () => {
+  it("returns null for an unknown user", async () => {
+    db.user.findUnique.mockResolvedValue(null);
+    expect(await getPlayerHistory("league1", "nope")).toBeNull();
+  });
+
+  it("sums per-season totals and omits seasons with no scores for this player", async () => {
+    db.user.findUnique.mockResolvedValue({ id: "user1", email: "a@b.com", handle: "Alice" } as never);
+    db.season.findMany.mockResolvedValue([
+      {
+        id: "season1",
+        name: "Fall",
+        sessions: [{ scores: [{ points: 50 }] }, { scores: [{ points: -10 }] }],
+      },
+      {
+        id: "season2",
+        name: "Spring",
+        sessions: [{ scores: [] }], // this player never scored this season
+      },
+    ] as never);
+
+    const history = await getPlayerHistory("league1", "user1");
+
+    expect(history).toEqual({
+      userId: "user1",
+      handle: "Alice",
+      email: "a@b.com",
+      allTimeTotal: 40,
+      seasons: [{ seasonId: "season1", seasonName: "Fall", totalPoints: 40, sessionsPlayed: 2 }],
+    });
   });
 });
 

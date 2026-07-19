@@ -17,6 +17,10 @@ vi.mock("@/lib/server/league", () => ({
   getSeasonStandings: vi.fn(),
   getSessionScores: vi.fn(),
   enterScores: vi.fn(),
+  linkRoomToSession: vi.fn(),
+  getLinkedRooms: vi.fn(),
+  syncSessionScoresFromRooms: vi.fn(),
+  getPlayerHistory: vi.fn(),
 }));
 
 import { currentUser } from "@/lib/server/currentUser";
@@ -29,6 +33,9 @@ import { GET as seasonDetailRoute } from "@/app/api/leagues/seasons/[seasonId]/r
 import { POST as startSessionRoute } from "@/app/api/leagues/seasons/[seasonId]/sessions/route";
 import { GET as standingsRoute } from "@/app/api/leagues/seasons/[seasonId]/standings/route";
 import { GET as scoresGetRoute, POST as scoresPostRoute } from "@/app/api/leagues/sessions/[sessionId]/scores/route";
+import { GET as roomsGetRoute, POST as roomsPostRoute } from "@/app/api/leagues/sessions/[sessionId]/rooms/route";
+import { POST as syncRoute } from "@/app/api/leagues/sessions/[sessionId]/sync/route";
+import { GET as playerHistoryRoute } from "@/app/api/leagues/[id]/players/[userId]/route";
 
 const mockCurrentUser = currentUser as unknown as ReturnType<typeof vi.fn>;
 
@@ -220,5 +227,85 @@ describe("GET/POST /api/leagues/sessions/:sessionId/scores", () => {
     });
     expect(res2.status).toBe(200);
     expect(league.enterScores).toHaveBeenCalledWith("sess1", "user1", [{ userId: "u1", points: 25 }]);
+  });
+});
+
+describe("GET/POST /api/leagues/sessions/:sessionId/rooms", () => {
+  it("GET 404s a non-member, 200s a member with linked rooms", async () => {
+    mockCurrentUser.mockResolvedValue({ id: "user1" });
+    vi.mocked(league.sessionLeagueId).mockResolvedValue("l1");
+    vi.mocked(league.isLeagueMember).mockResolvedValueOnce(false);
+    expect((await roomsGetRoute(new Request("http://localhost/x"), { params: { sessionId: "sess1" } })).status).toBe(
+      404,
+    );
+
+    vi.mocked(league.isLeagueMember).mockResolvedValueOnce(true);
+    vi.mocked(league.getLinkedRooms).mockResolvedValue([{ roomId: "ROOM01", matchFinished: true }]);
+    const res = await roomsGetRoute(new Request("http://localhost/x"), { params: { sessionId: "sess1" } });
+    expect(res.status).toBe(200);
+    expect((await res.json()).rooms).toHaveLength(1);
+  });
+
+  it("POST requires a roomId and maps a false result (not commissioner) to 403", async () => {
+    mockCurrentUser.mockResolvedValue({ id: "user1" });
+    expect((await roomsPostRoute(jsonReq({}), { params: { sessionId: "sess1" } })).status).toBe(400);
+
+    vi.mocked(league.linkRoomToSession).mockResolvedValueOnce(false);
+    expect((await roomsPostRoute(jsonReq({ roomId: "ROOM01" }), { params: { sessionId: "sess1" } })).status).toBe(403);
+
+    vi.mocked(league.linkRoomToSession).mockResolvedValueOnce(true);
+    const res = await roomsPostRoute(jsonReq({ roomId: "ROOM01" }), { params: { sessionId: "sess1" } });
+    expect(res.status).toBe(200);
+    expect(league.linkRoomToSession).toHaveBeenCalledWith("sess1", "user1", "ROOM01");
+  });
+});
+
+describe("POST /api/leagues/sessions/:sessionId/sync", () => {
+  it("requires auth and maps a null result (not commissioner) to 403", async () => {
+    mockCurrentUser.mockResolvedValue(null);
+    expect((await syncRoute(new Request("http://localhost/x"), { params: { sessionId: "sess1" } })).status).toBe(401);
+
+    mockCurrentUser.mockResolvedValue({ id: "user1" });
+    vi.mocked(league.syncSessionScoresFromRooms).mockResolvedValueOnce(null);
+    expect((await syncRoute(new Request("http://localhost/x"), { params: { sessionId: "sess1" } })).status).toBe(403);
+  });
+
+  it("returns the sync summary on success", async () => {
+    mockCurrentUser.mockResolvedValue({ id: "user1" });
+    vi.mocked(league.syncSessionScoresFromRooms).mockResolvedValue({ syncedPlayers: 4, roomsSynced: 1, roomsSkipped: 0 });
+    const res = await syncRoute(new Request("http://localhost/x"), { params: { sessionId: "sess1" } });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ syncedPlayers: 4, roomsSynced: 1, roomsSkipped: 0 });
+  });
+});
+
+describe("GET /api/leagues/:id/players/:userId", () => {
+  it("404s when the caller isn't a member", async () => {
+    mockCurrentUser.mockResolvedValue({ id: "user1" });
+    vi.mocked(league.isLeagueMember).mockResolvedValueOnce(false);
+    const res = await playerHistoryRoute(new Request("http://localhost/x"), { params: { id: "l1", userId: "u2" } });
+    expect(res.status).toBe(404);
+  });
+
+  it("404s when the target user isn't a member of this league either", async () => {
+    mockCurrentUser.mockResolvedValue({ id: "user1" });
+    vi.mocked(league.isLeagueMember).mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const res = await playerHistoryRoute(new Request("http://localhost/x"), { params: { id: "l1", userId: "u2" } });
+    expect(res.status).toBe(404);
+  });
+
+  it("200s with the player's history when both are members", async () => {
+    mockCurrentUser.mockResolvedValue({ id: "user1" });
+    vi.mocked(league.isLeagueMember).mockResolvedValue(true);
+    vi.mocked(league.getPlayerHistory).mockResolvedValue({
+      userId: "u2",
+      handle: "Bob",
+      email: "bob@example.com",
+      allTimeTotal: 30,
+      seasons: [],
+    });
+    const res = await playerHistoryRoute(new Request("http://localhost/x"), { params: { id: "l1", userId: "u2" } });
+    expect(res.status).toBe(200);
+    expect((await res.json()).history.allTimeTotal).toBe(30);
   });
 });

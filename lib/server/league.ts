@@ -9,10 +9,14 @@
 //
 // Vacated-seat hands (RoomManager.convertToCpu / MatchPlayer.vacatedAtGame)
 // are EXCLUDED from a player's league standing — locked policy, 2026-07-09.
-// Not yet relevant to any code here: Phase 1 is manual score entry only, with
-// no MatchGame linkage at all. This matters once Phase 2's online auto-feed
-// starts turning MatchGame.payouts into ScoreRecord rows — that logic must
-// skip games at/after a seat's vacatedAtGame for that player.
+// syncSessionScoresFromRooms (Phase 2) is where this is enforced: it skips any
+// MatchGame at/after a seat's vacatedAtGame when summing that player's points.
+//
+// Phase 2 auto-feed reads Room/Match/MatchPlayer/MatchGame — the DURABLE
+// POSTGRES READ-MODEL, never RoomManager/GameRoom/the live engine. That's the
+// same discipline the Match/MatchGame layer already follows (see its own
+// header comment) and is what "references User and score records only" means
+// in practice: read-model-only, never the live runtime.
 // =============================================================================
 
 import { prisma } from "@/lib/prisma";
@@ -245,4 +249,144 @@ export async function getSeasonStandings(seasonId: string): Promise<StandingsRow
     }
   }
   return Array.from(byUser.values()).sort((a, b) => b.totalPoints - a.totalPoints);
+}
+
+// ── Phase 2: linked rooms + online auto-feed ────────────────────────────────
+
+/**
+ * Link a multiplayer room to a league night — commissioner-only. Upserts the
+ * Postgres Room row rather than requiring it to pre-exist: a room's row is
+ * only created (via connectOrCreate) when its first Match starts, so linking
+ * immediately after `POST /api/rooms` creates it (the normal "N pre-seated
+ * tables" flow) would otherwise find nothing there yet.
+ */
+export async function linkRoomToSession(sessionId: string, requestingUserId: string, roomId: string): Promise<boolean> {
+  const leagueId = await sessionLeagueId(sessionId);
+  if (!leagueId || !(await isCommissioner(leagueId, requestingUserId))) return false;
+  await prisma.room.upsert({
+    where: { id: roomId },
+    create: { id: roomId, leagueSessionId: sessionId, createdById: requestingUserId },
+    update: { leagueSessionId: sessionId },
+  });
+  return true;
+}
+
+export interface LinkedRoomView {
+  roomId: string;
+  matchFinished: boolean;
+}
+
+/** Rooms linked to a league night, with whether each one's match has finished (i.e. is ready to sync). */
+export async function getLinkedRooms(sessionId: string): Promise<LinkedRoomView[]> {
+  const rooms = await prisma.room.findMany({
+    where: { leagueSessionId: sessionId },
+    include: { matches: { orderBy: { startedAt: "desc" }, take: 1, select: { endedAt: true } } },
+    orderBy: { createdAt: "asc" },
+  });
+  return rooms.map((r) => ({ roomId: r.id, matchFinished: r.matches[0]?.endedAt != null }));
+}
+
+export interface SyncResult {
+  syncedPlayers: number;
+  roomsSynced: number;
+  roomsSkipped: number;
+}
+
+/**
+ * Commissioner-only. Sums each human player's payouts across a linked room's
+ * whole Match (excluding any MatchGame at/after that seat's vacatedAtGame —
+ * locked policy) and upserts one ScoreRecord per player for the night,
+ * source="online". Aggregates across ALL of a session's linked rooms before
+ * writing (not per-room) so a player who somehow appears in more than one
+ * table adds rather than overwrites; safe to call repeatedly as tables finish
+ * — rooms whose match hasn't ended yet are counted as skipped, not errored.
+ */
+export async function syncSessionScoresFromRooms(sessionId: string, requestingUserId: string): Promise<SyncResult | null> {
+  const leagueId = await sessionLeagueId(sessionId);
+  if (!leagueId || !(await isCommissioner(leagueId, requestingUserId))) return null;
+
+  const rooms = await prisma.room.findMany({
+    where: { leagueSessionId: sessionId },
+    include: {
+      matches: { orderBy: { startedAt: "desc" }, take: 1, include: { players: true, games: true } },
+    },
+  });
+
+  const totals = new Map<string, { points: number; matchId: string }>();
+  let roomsSynced = 0;
+  let roomsSkipped = 0;
+
+  for (const room of rooms) {
+    const match = room.matches[0];
+    if (!match || !match.endedAt) {
+      roomsSkipped++;
+      continue;
+    }
+    for (const player of match.players) {
+      if (!player.userId) continue; // CPU seat — never a human to attribute points to
+      const cutoff = player.vacatedAtGame ?? Infinity;
+      let points = 0;
+      for (const game of match.games) {
+        if (game.gameNumber >= cutoff) continue; // excludes vacated-seat hands — locked policy, 2026-07-09
+        const payouts = game.payouts as Record<string, number>;
+        points += payouts[player.seat] ?? 0;
+      }
+      const existing = totals.get(player.userId);
+      totals.set(player.userId, { points: (existing?.points ?? 0) + points, matchId: match.id });
+    }
+    roomsSynced++;
+  }
+
+  await Promise.all(
+    Array.from(totals.entries()).map(([userId, { points, matchId }]) =>
+      prisma.scoreRecord.upsert({
+        where: { sessionId_userId: { sessionId, userId } },
+        create: { sessionId, userId, points, source: "online", matchId, enteredByUserId: requestingUserId },
+        update: { points, source: "online", matchId, enteredByUserId: requestingUserId },
+      }),
+    ),
+  );
+
+  return { syncedPlayers: totals.size, roomsSynced, roomsSkipped };
+}
+
+// ── Phase 2: player history ─────────────────────────────────────────────────
+
+export interface PlayerSeasonHistory {
+  seasonId: string;
+  seasonName: string;
+  totalPoints: number;
+  sessionsPlayed: number;
+}
+
+export interface PlayerHistory {
+  userId: string;
+  handle: string | null;
+  email: string;
+  allTimeTotal: number;
+  seasons: PlayerSeasonHistory[];
+}
+
+/** A member's full score history within one league, broken down per season (seasons they never scored in are omitted). */
+export async function getPlayerHistory(leagueId: string, userId: string): Promise<PlayerHistory | null> {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) return null;
+
+  const seasons = await prisma.season.findMany({
+    where: { leagueId },
+    include: { sessions: { include: { scores: { where: { userId } } } } },
+    orderBy: { startsAt: "desc" },
+  });
+
+  const seasonRows: PlayerSeasonHistory[] = [];
+  let allTimeTotal = 0;
+  for (const season of seasons) {
+    const scores = season.sessions.flatMap((s) => s.scores);
+    if (scores.length === 0) continue;
+    const totalPoints = scores.reduce((sum, s) => sum + s.points, 0);
+    allTimeTotal += totalPoints;
+    seasonRows.push({ seasonId: season.id, seasonName: season.name, totalPoints, sessionsPlayed: scores.length });
+  }
+
+  return { userId, handle: user.handle, email: user.email, allTimeTotal, seasons: seasonRows };
 }

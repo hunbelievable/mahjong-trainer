@@ -66,7 +66,7 @@ export default function ScoreEntryPanel({
   }
 
   return (
-    <div className="border border-gray-200 rounded-lg p-3 space-y-2">
+    <div className="space-y-2">
       <div className="flex items-center justify-between">
         <span className="text-sm font-semibold text-gray-800">{label}</span>
         {isCommissioner && (

@@ -31,7 +31,9 @@ export default async function LeagueDetailPage({ params }: { params: { id: strin
           <ul className="space-y-1.5">
             {league.members.map((m) => (
               <li key={m.userId} className="flex items-center justify-between text-sm">
-                <span className="text-gray-700">{m.handle ?? m.email}</span>
+                <Link href={`/league/${league.id}/players/${m.userId}`} className="text-gray-700 hover:text-indigo-600">
+                  {m.handle ?? m.email}
+                </Link>
                 {m.userId === league.commissionerUserId && (
                   <span className="text-[10px] font-semibold text-amber-700 bg-amber-100 border border-amber-300 rounded px-1.5 py-0.5">
                     Commissioner
